@@ -1,0 +1,22 @@
+[package]
+name = "ouralink"
+description = "JNI bridge: runs open_oura's sync over a Kotlin-backed BLE transport"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Pinned to the same open_oura rev as the Dockerfile's open_health pin.
+oura-link = { git = "https://github.com/Th0rgal/open_oura", rev = "4f7957d3304c4084f0e1e703f3d84606bf10b781", default-features = false }
+oura-protocol = { git = "https://github.com/Th0rgal/open_oura", rev = "4f7957d3304c4084f0e1e703f3d84606bf10b781" }
+async-trait = "0.1"
+jni = "0.21"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
