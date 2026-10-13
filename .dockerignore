@@ -1,0 +1,5 @@
+bin/
+systemd/
+*.md
+*.py
+*.sh

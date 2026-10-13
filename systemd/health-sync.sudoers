@@ -1,0 +1,3 @@
+# Lets health-sync-trigger (running as matt) start the ring sync and nothing
+# else. Installed as /etc/sudoers.d/health-sync by ../install-host.sh.
+matt ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block oura-sync.service
