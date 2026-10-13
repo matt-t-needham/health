@@ -15,7 +15,8 @@ upstream binary, `oura-sync` unit, `oura-ring.key`, `oura.db`).
 
 | Path | What |
 |------|------|
-| `Dockerfile` | Builds `oura` at the pinned `OPEN_HEALTH_REV`. `runtime` stage = the dashboard container |
+| `Dockerfile` | Builds `oura` at the pinned `OPEN_HEALTH_REV` with `patches/` applied. `runtime` stage = the dashboard container |
+| `patches/` | Our changes to upstream's web UI, applied at build; listed in `patches/README.md` |
 | `bin/oura` | The same binary, copied out for the host sync unit (not committed; rebuild below) |
 | `systemd/oura-sync.{service,timer}` | Host sync, hourly, into `~/health/data/oura.db` |
 | `sync.sh` | The unit's `ExecStart`: connect + `oura sync`, retried for up to 15 min; stamps `bix-infra/logs/oura-sync/last-success` on success |
@@ -58,9 +59,11 @@ network.
   is safe; **recreating `health-proxy` strands `health`**: run
   `docker compose up -d --force-recreate health` after it.
 - The proxy is an **allowlist**. `/api/ring-key` (exports/replaces the key),
-  `/api/live-hr`, `/api/feature`, `/dna`, `/blood` all 404; the page's Live
-  HR, feature toggles and DNA/blood links fail on purpose. A route added
-  upstream stays closed until listed in `nginx/health.conf`.
+  `/api/live-hr`, `/api/feature`, `/dna`, `/blood` all 404 on purpose, and
+  `patches/dashboard-trim.patch` removes the controls that call them (Live HR,
+  DNA/Blood links, key export/import, capability toggles). A route added
+  upstream stays closed until listed in `nginx/health.conf`; a control added
+  upstream for a closed route shows until it is patched out too.
 - Host processes calling 172.17.0.1 arrive from the LAN IP and are refused by
   the trigger's IP check; test it from a container.
 - Scores (sleep/readiness/activity, CVA) need Oura's proprietary PyTorch
@@ -128,5 +131,7 @@ sudo systemctl start --no-block oura-sync.service   # allowed for matt by health
 
 Review upstream's diff since `OPEN_HEALTH_REV` (and the open_oura rev it pins),
 especially `crates/oura-cli/src/dashboard.rs` routes against the proxy
-allowlist and the `/api/sync` reply shape `app.js` expects, then bump the
-ARG, rebuild, and copy the binary out again.
+allowlist and the `/api/sync` reply shape `app.js` expects, and any new UI
+controls that call closed routes, then bump the ARG, rebuild (the build fails
+if a patch in `patches/` no longer applies: regenerate it per
+`patches/README.md`), and copy the binary out again.
