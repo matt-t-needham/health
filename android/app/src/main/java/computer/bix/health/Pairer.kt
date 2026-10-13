@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit
 @SuppressLint("MissingPermission")
 object Pairer {
     /** Returns null on success, otherwise a one-line error. */
-    fun pair(ctx: Context, log: (String) -> Unit): String? {
+    fun pair(ctx: Context, log: (String) -> Unit): String? = synchronized(RingLock.lock) {
         val keyHex = Secrets.get(ctx, "ring_key") ?: return "Ring key not provisioned"
         val serial = Secrets.get(ctx, "ring_serial") ?: return "Ring serial not provisioned"
         val store = Store.get(ctx)

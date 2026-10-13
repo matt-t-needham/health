@@ -8,7 +8,9 @@
 //! true before the sync continues.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JValue};
@@ -21,7 +23,12 @@ use tokio::sync::broadcast;
 
 static VM: OnceLock<JavaVM> = OnceLock::new();
 static SESSIONS: OnceLock<Mutex<HashMap<i64, broadcast::Sender<Vec<u8>>>>> = OnceLock::new();
+static STOPS: OnceLock<Mutex<HashMap<i64, Arc<AtomicBool>>>> = OnceLock::new();
 static NEXT_ID: Mutex<i64> = Mutex::new(1);
+
+fn stops() -> &'static Mutex<HashMap<i64, Arc<AtomicBool>>> {
+    STOPS.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 fn sessions() -> &'static Mutex<HashMap<i64, broadcast::Sender<Vec<u8>>>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -79,6 +86,7 @@ pub extern "system" fn Java_computer_bix_health_NativeSync_nativeOpen(
     let id = *next;
     *next += 1;
     sessions().lock().unwrap().insert(id, tx);
+    stops().lock().unwrap().insert(id, Arc::new(AtomicBool::new(false)));
     id
 }
 
@@ -89,6 +97,19 @@ pub extern "system" fn Java_computer_bix_health_NativeSync_nativeClose(
     handle: jlong,
 ) {
     sessions().lock().unwrap().remove(&handle);
+    stops().lock().unwrap().remove(&handle);
+}
+
+/// Asks a running live session to stop; it restores the ring's feature mode on the way out.
+#[no_mangle]
+pub extern "system" fn Java_computer_bix_health_NativeSync_nativeStop(
+    _env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+) {
+    if let Some(flag) = stops().lock().unwrap().get(&handle) {
+        flag.store(true, Ordering::Relaxed);
+    }
 }
 
 #[no_mangle]
@@ -108,6 +129,40 @@ fn call_bool(env: &mut JNIEnv, obj: &JObject, name: &str, sig: &str, args: &[JVa
     env.call_method(obj, name, sig, args)
         .and_then(|v| v.z())
         .unwrap_or(false)
+}
+
+fn push_info(env: &mut JNIEnv, bridge: &JObject, key: &str, value: &str) {
+    if let (Ok(k), Ok(v)) = (env.new_string(key), env.new_string(value)) {
+        let _ = call_bool(
+            env,
+            bridge,
+            "onInfo",
+            "(Ljava/lang/String;Ljava/lang/String;)Z",
+            &[JValue::Object(&k), JValue::Object(&v)],
+        );
+    }
+}
+
+/// Features to hold on the ring, matching the HTPC's feature_modes.json
+/// (everything automatic except exercise HR, which stays off).
+const FEATURES: &[(&str, u8, u8)] = &[
+    ("daytime_hr", 0x02, 1),
+    ("spo2", 0x04, 1),
+    ("resting_hr", 0x08, 1),
+    ("real_steps", 0x0b, 1),
+    ("cva_ppg", 0x0d, 1),
+    ("exercise_hr", 0x03, 0),
+];
+
+/// Applies [`FEATURES`]; returns "ok" or a list of the ones that failed.
+async fn configure_features(client: &OuraClient<JniTransport>) -> String {
+    let mut failed = Vec::new();
+    for (name, id, mode) in FEATURES {
+        if let Err(e) = client.set_feature_mode(*id, *mode).await {
+            failed.push(format!("{name}: {e}"));
+        }
+    }
+    if failed.is_empty() { "ok".into() } else { failed.join("; ") }
 }
 
 /// Runs one sync. Returns null on success, otherwise a one-line error message.
@@ -177,6 +232,12 @@ fn run_sync(
             if !call_bool(&mut env, bridge, "onSerial", "(Ljava/lang/String;)Z", &[JValue::Object(&s)]) {
                 return Err(format!("serial {serial} is not the expected ring"));
             }
+        }
+        if let Ok(b) = client.battery().await {
+            push_info(&mut env_cell.borrow_mut(), bridge, "battery", &b.percent.to_string());
+        }
+        if let Ok(f) = client.firmware().await {
+            push_info(&mut env_cell.borrow_mut(), bridge, "firmware", &f.firmware_version);
         }
 
         client
@@ -290,6 +351,87 @@ fn run_pair(
             .await
             .map_err(|e| format!("set_auth_key (is the ring factory-reset?): {e}"))?;
         client.authenticate(&key).await.map_err(|e| format!("verifying auth: {e}"))?;
+        let features = configure_features(&client).await;
+        push_info(env, bridge, "features", &features);
+        if let Ok(b) = client.battery().await {
+            push_info(env, bridge, "battery", &b.percent.to_string());
+        }
+        if let Ok(f) = client.firmware().await {
+            push_info(env, bridge, "firmware", &f.firmware_version);
+        }
+        Ok(())
+    })
+}
+
+/// Streams live heart rate for up to `seconds`, calling `bridge.onBeat(bpm, ibi)`.
+/// Returns null on success (including a requested stop), otherwise a one-line error.
+#[no_mangle]
+pub extern "system" fn Java_computer_bix_health_NativeSync_nativeLiveHr(
+    mut env: JNIEnv,
+    _class: JClass,
+    handle: jlong,
+    key: JByteArray,
+    seconds: jint,
+    bridge: JObject,
+) -> jstring {
+    let result = run_live(&mut env, handle, &key, seconds.max(1) as u64, &bridge);
+    match result {
+        Ok(()) => std::ptr::null_mut(),
+        Err(msg) => env
+            .new_string(msg)
+            .map(|s| s.into_raw())
+            .unwrap_or(std::ptr::null_mut()),
+    }
+}
+
+fn run_live(
+    env: &mut JNIEnv,
+    handle: i64,
+    key: &JByteArray,
+    seconds: u64,
+    bridge: &JObject,
+) -> std::result::Result<(), String> {
+    let key_bytes = env.convert_byte_array(key).map_err(|e| e.to_string())?;
+    let key: [u8; 16] = key_bytes
+        .try_into()
+        .map_err(|_| "ring key must be 16 bytes".to_string())?;
+    let tx = sessions().lock().unwrap().get(&handle).cloned().ok_or("unknown session handle")?;
+    let stop = stops().lock().unwrap().get(&handle).cloned().ok_or("unknown session handle")?;
+    stop.store(false, Ordering::Relaxed);
+    let bridge_ref = env.new_global_ref(bridge).map_err(|e| e.to_string())?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_time()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let client = OuraClient::new(JniTransport { bridge: bridge_ref, tx });
+    let env_cell = std::cell::RefCell::new(env);
+
+    rt.block_on(async {
+        client.authenticate(&key).await.map_err(|e| format!("auth: {e}"))?;
+        {
+            let live = client.live_heart_rate(Duration::from_secs(seconds), false, |s| {
+                let mut env = env_cell.borrow_mut();
+                call_bool(
+                    &mut env,
+                    bridge,
+                    "onBeat",
+                    "(II)Z",
+                    &[JValue::Int(s.bpm as i32), JValue::Int(s.ibi_ms as i32)],
+                );
+            });
+            let watch = async {
+                while !stop.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            };
+            tokio::select! {
+                r = live => r.map_err(|e| format!("live HR: {e}"))?,
+                _ = watch => {}
+            }
+        }
+        // An early stop skips live_heart_rate's own cleanup, so restore automatic mode here.
+        let _ = client.set_feature_mode(0x02, 1).await;
         Ok(())
     })
 }

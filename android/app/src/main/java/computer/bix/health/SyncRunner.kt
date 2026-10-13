@@ -6,10 +6,8 @@ import android.content.Context
 /** One sync: find the paired ring, drain it into the local store, then push. */
 @SuppressLint("MissingPermission")
 object SyncRunner {
-    private val lock = Any()
-
     /** Returns null on success, otherwise a one-line error. Safe to call from any worker thread. */
-    fun run(ctx: Context, windowMs: Long, log: (String) -> Unit = {}): String? = synchronized(lock) {
+    fun run(ctx: Context, windowMs: Long, log: (String) -> Unit = {}): String? = synchronized(RingLock.lock) {
         val store = Store.get(ctx)
         val err = ringPhase(ctx, store, windowMs, log)
         // Upload whatever is queued even if the ring phase failed: earlier batches may be waiting.
@@ -22,7 +20,10 @@ object SyncRunner {
         val keyHex = Secrets.get(ctx, "ring_key") ?: return note(store, "Not provisioned")
         val serial = Secrets.get(ctx, "ring_serial") ?: return note(store, "Ring serial not provisioned")
         val address = store.state("ring_address") ?: return note(store, "Ring not paired")
-        val dev = RingFinder.bondedDevice(ctx, address) ?: return note(store, "Ring bond is gone; pair again")
+        val dev = RingFinder.bondedDevice(ctx, address) ?: run {
+            store.setState("ring_state", "not paired")
+            return note(store, "Ring bond is gone; pair again")
+        }
 
         store.setState("ring_state", "connecting")
         val hit = RingFinder.find(ctx, windowMs, lowLatency = false) { it.device.address == address }

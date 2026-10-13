@@ -16,6 +16,8 @@ import java.util.Date
 import java.util.Locale
 
 /** Status and three buttons. All state is shown as words, never colour alone. */
+private const val STATS_URL = "https://health.bix.computer"
+
 class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private val stamp = SimpleDateFormat("EEE d MMM HH:mm", Locale.US)
@@ -39,6 +41,7 @@ class MainActivity : Activity() {
     private lateinit var rows: LinkedHashMap<String, TextView>
     private lateinit var problemCard: LinearLayout
     private lateinit var problemText: TextView
+    private lateinit var pairButton: Button
 
     /** Card with a 7dp accent bar on the left, rounded on the left corners only. */
     private fun card(accent: Int, content: LinearLayout): LinearLayout {
@@ -97,10 +100,10 @@ class MainActivity : Activity() {
         }
 
         rows = linkedMapOf(
-            "ring" to value(), "sync" to value(), "push" to value(), "queue" to value(),
+            "ring" to value(), "battery" to value(), "firmware" to value(), "sync" to value(), "push" to value(), "queue" to value(),
         )
         val statusBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        for ((key, name) in listOf("ring" to "Ring", "sync" to "Last sync from ring", "push" to "Last push to HTPC", "queue" to "Waiting to push")) {
+        for ((key, name) in listOf("ring" to "Ring", "battery" to "Ring battery", "firmware" to "Ring firmware", "sync" to "Last sync from ring", "push" to "Last push to HTPC", "queue" to "Waiting to push")) {
             statusBox.addView(label(name).apply { if (key != "ring") setPadding(0, dp(10), 0, 0) })
             statusBox.addView(rows[key])
         }
@@ -116,9 +119,14 @@ class MainActivity : Activity() {
             setPadding(dp(12), dp(8), dp(12), dp(24))
             addView(card(verdigris, statusBox))
             addView(problemCard)
-            addView(button("Sync now", true) { requirePermissions { Scheduler.syncNow(this@MainActivity); append("Sync requested") } }
+            addView(button("Live heart rate", true) { requirePermissions { startActivity(android.content.Intent(this@MainActivity, LiveHrActivity::class.java)) } }
                 .also { (it.layoutParams as LinearLayout.LayoutParams).topMargin = dp(18) })
-            addView(button("Pair ring", false) { requirePermissions { confirmPair() } })
+            addView(button("Sync now", false) { requirePermissions { Scheduler.syncNow(this@MainActivity); append("Sync requested") } })
+            addView(button("Full Stats", false) { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(STATS_URL))) })
+            pairButton = button("Pair ring", false) { requirePermissions { confirmPair() } }
+            pairButton.visibility = android.view.View.GONE
+            addView(pairButton)
+            addView(label("Diagnostics").apply { setPadding(dp(4), dp(18), 0, dp(2)) })
             addView(button("Scan for ring (60 s)", false) { requirePermissions { scanOnly() } })
             addView(label("Activity").apply { setPadding(dp(4), dp(18), 0, dp(6)) })
             addView(log)
@@ -172,6 +180,10 @@ class MainActivity : Activity() {
         fun at(key: String) = s.state(key)?.toLongOrNull()?.let { stamp.format(Date(it)) } ?: "Never"
         val events = s.state("last_sync_events")?.let { " ($it events)" } ?: ""
         rows["ring"]?.text = ring
+        // Pairing is only offered when there is no usable bond.
+        pairButton.visibility = if (ring == "Not paired") android.view.View.VISIBLE else android.view.View.GONE
+        rows["battery"]?.text = s.state("ring_battery")?.let { "$it%" } ?: "Unknown"
+        rows["firmware"]?.text = s.state("ring_firmware") ?: "Unknown"
         rows["sync"]?.text = at("last_sync_ms") + events
         rows["push"]?.text = at("last_push_ms")
         val n = s.pendingCount()

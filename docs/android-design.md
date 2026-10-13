@@ -194,6 +194,16 @@ is still bonded to the HTPC (see the spike results). Built:
   accepts adverts whose resolved address equals the bond address; unverified),
   a real drain, background scheduling under Doze, Cloudflare Access rejection
   text.
+- Also built (compile-tested only): "Full Stats" button (opens
+  https://health.bix.computer in the browser); ring battery and firmware on
+  the status card (read each sync and after pairing); after pairing the
+  bridge applies the ring features the HTPC used to hold (daytime HR, SpO2,
+  resting HR, real steps and CVA PPG automatic, exercise HR off) and reports
+  any that fail in the activity log; a "Live heart rate" screen (60 s,
+  on demand, nothing stored or uploaded; Stop or leaving the screen ends it
+  and restores automatic mode). Syncs, pairing and live HR share one lock
+  because the ring takes one connection at a time. No command exists to write
+  the ring's body profile, so the post-reset profile defaults are left alone.
 - The wire format at `POST <relay_url>/v1/batch` is provisional until the
   relay is built: gzip JSON `{batch_id, serial, cursor_before, cursor_after,
   events: [[tag, ts, hexbody], ...]}`, idempotent on `batch_id`.

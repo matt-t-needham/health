@@ -13,6 +13,12 @@ object NativeSync {
 
         fun onSerial(serial: String): Boolean
 
+        /** Ring facts read during a session: "battery" (percent), "firmware", "features". */
+        fun onInfo(key: String, value: String): Boolean
+
+        /** One live heart-rate beat. */
+        fun onBeat(bpm: Int, ibiMs: Int): Boolean
+
         /** Persist the batch and [nextCursor] durably, then return true to continue. */
         fun onBatch(
             tags: ByteArray,
@@ -25,6 +31,12 @@ object NativeSync {
 
     @JvmStatic external fun nativeOpen(): Long
     @JvmStatic external fun nativeClose(handle: Long)
+    /** Asks a running [nativeLiveHr] to stop. */
+    @JvmStatic external fun nativeStop(handle: Long)
+
+    /** Streams live heart rate for up to [seconds]. Blocks. Null on success (or a requested stop), else a one-line error. */
+    @JvmStatic external fun nativeLiveHr(handle: Long, key: ByteArray, seconds: Int, bridge: Bridge): String?
+
     @JvmStatic external fun nativePush(handle: Long, frame: ByteArray)
 
     /** Pairs with a factory-reset ring and installs [key]. Blocks. Null on success, else a one-line error. */

@@ -20,6 +20,20 @@ class SessionBridge(
         return serial == expectedSerial
     }
 
+    override fun onInfo(key: String, value: String): Boolean {
+        when (key) {
+            "battery" -> { store.setState("ring_battery", value); store.setState("ring_info_ms", System.currentTimeMillis().toString()) }
+            "firmware" -> store.setState("ring_firmware", value)
+            "features" -> {
+                store.setState("ring_features", value)
+                onProgress("Ring features: $value")
+            }
+        }
+        return true
+    }
+
+    override fun onBeat(bpm: Int, ibiMs: Int) = true
+
     override fun onBatch(tags: ByteArray, timestamps: IntArray, bodies: Array<ByteArray>, nextCursor: Int, bytesLeft: Int): Boolean {
         return try {
             store.commitBatch(serial, tags, timestamps, bodies, nextCursor.toLong() and 0xffffffffL)
