@@ -1,0 +1,30 @@
+# Commits health-relay's spool into ~/health/data/oura.db with the
+# dashboard's own store and decoders (bin/health-ingest, built from
+# ../ingest). Started by health-ingest.path whenever a batch lands in
+# spool/incoming/. Stamps bix-infra/logs/oura-sync/last-success when a batch
+# adds new data (the nightly heartbeat). Logged as a `journal` source.
+[Unit]
+Description=Ingest spooled ring batches into oura.db
+# One run drains until the spool has been empty for 5 s, so a backlog upload
+# is a few runs, not one per batch (which hit the default 5-in-10s limit on
+# 2026-10-13). Still bounded: a file the run can't move out keeps
+# re-triggering it, and this limit then fails the unit loudly.
+StartLimitIntervalSec=60
+StartLimitBurst=20
+
+[Service]
+Type=oneshot
+User=matt
+Group=matt
+Environment=HEALTH_DB=/home/matt/health/data/oura.db
+Environment=HEALTH_SPOOL=/home/matt/health/relay/spool
+Environment=HEALTH_STAMP=/home/matt/apps/bix-infra/logs/oura-sync/last-success
+Environment=HEALTH_SERIALS=2016082503005273
+ExecStart=/home/matt/apps/health/bin/health-ingest
+TimeoutStartSec=10min
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateNetwork=true
+ProtectSystem=strict
+ReadWritePaths=/home/matt/health/data /home/matt/health/relay/spool /home/matt/apps/bix-infra/logs/oura-sync
+CapabilityBoundingSet=

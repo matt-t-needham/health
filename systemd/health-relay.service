@@ -1,0 +1,52 @@
+# The phone app's upload endpoint: health-proxy forwards
+# POST /relay/v1/batch here (172.17.0.1:9102). Authenticates, validates and
+# spools each batch; never opens oura.db. See ../relay/health-relay.py.
+# Logged as a `journal` source.
+#
+# Internet-facing, so it sees almost nothing: /home is an empty tmpfs except
+# its script (ro), the device-hash file (ro) and the spool (rw). Its only
+# outbound traffic is fetching the Access team's signing keys.
+[Unit]
+Description=health.bix.computer ring-data relay
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=matt
+Group=matt
+# The health compose network (docker network inspect apps_health). If it is
+# recreated on another subnet, uploads fail closed with 403 until this matches.
+Environment=HEALTH_RELAY_ALLOW=172.21.0.0/16
+Environment=HEALTH_RELAY_CONF=/home/matt/.config/bix/health-relay.conf
+Environment=HEALTH_SERIALS=2016082503005273
+Environment=HEALTH_SPOOL=/home/matt/health/relay/spool
+# HEALTH_RELAY_ACCESS_AUD (the health.bix.computer Access app's AUD tag) comes from the
+# drop-in install-host.sh writes from bix-infra/.env; unset, the relay won't start.
+ExecStart=/usr/bin/python3 -I /home/matt/apps/health/relay/health-relay.py
+Restart=on-failure
+RestartSec=3
+
+TemporaryFileSystem=/home
+BindReadOnlyPaths=/home/matt/apps/health/relay/health-relay.py
+BindReadOnlyPaths=/home/matt/.config/bix/health-relay.conf
+BindPaths=/home/matt/health/relay/spool
+ProtectSystem=strict
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+MemoryMax=256M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

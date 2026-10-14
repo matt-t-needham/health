@@ -1,0 +1,12 @@
+# Runs health-ingest.service while any batch waits in the spool (also at
+# boot, for files left there). The service moves every file out, to done/ or
+# failed/, so the glob stops matching once it has run.
+[Unit]
+Description=Watch the health-relay spool
+
+[Path]
+PathExistsGlob=/home/matt/health/relay/spool/incoming/*.json
+Unit=health-ingest.service
+
+[Install]
+WantedBy=paths.target
