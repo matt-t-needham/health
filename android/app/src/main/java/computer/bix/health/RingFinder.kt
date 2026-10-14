@@ -29,6 +29,7 @@ object RingFinder {
         lowLatency: Boolean,
         pickStrongest: Boolean = false,
         settleMs: Long = 0,
+        onSeen: (ScanResult) -> Unit = {},
         accept: (ScanResult) -> Boolean = { true },
     ): ScanResult? {
         val scanner = scanner(ctx) ?: return null
@@ -36,6 +37,7 @@ object RingFinder {
         val first = CountDownLatch(1)
         val cb = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, r: ScanResult) {
+                onSeen(r)
                 if (!accept(r)) return
                 synchronized(this) {
                     if (best == null || (pickStrongest && r.rssi > best!!.rssi)) best = r

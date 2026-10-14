@@ -39,7 +39,7 @@ object Pairer {
         try {
             if (!link.open(dev)) return fail(store, "Could not open the ring link")
             store.setState("ring_state", "connected")
-            val bridge = SessionBridge(link, store, serial)
+            val bridge = SessionBridge(link, store, serial, log)
             val err = NativeSync.nativePair(handle, keyHex.hexToBytes(), bridge)
             if (err != null) return fail(store, err)
             store.setState("ring_address", dev.address)

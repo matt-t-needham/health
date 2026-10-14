@@ -26,7 +26,10 @@ object SyncRunner {
         }
 
         store.setState("ring_state", "connecting")
-        val hit = RingFinder.find(ctx, windowMs, lowLatency = false) { it.device.address == address }
+        val seen = HashSet<String>()
+        val hit = RingFinder.find(ctx, windowMs, lowLatency = false, onSeen = { x ->
+            if (seen.add(x.device.address)) log("advert ${x.device.address} ${x.rssi} dBm" + if (x.device.address == address) " (ours)" else " (other)")
+        }) { it.device.address == address }
         if (hit == null) {
             store.setState("ring_state", "not seen")
             return note(store, "Ring not seen in ${windowMs / 1000} s")
@@ -39,8 +42,12 @@ object SyncRunner {
             if (!link.open(hit.device)) return note(store, "Could not open the ring link")
             store.setState("ring_state", "connected")
             val bridge = SessionBridge(link, store, serial, log)
+            val lastBatchBefore = store.maxBatchId()
             val err = NativeSync.nativeSync(handle, keyHex.hexToBytes(), store.cursor().toInt(), bridge)
             if (err != null) return note(store, err)
+            // Same rule as `oura sync`'s phone anchor: newest ring timestamp paired with wall-clock time.
+            val cursor = store.cursor()
+            if (bridge.events > 0 && cursor > 0) store.setAnchor(lastBatchBefore, cursor - 1, System.currentTimeMillis() / 1000)
             store.setState("last_sync_ms", System.currentTimeMillis().toString())
             store.setState("last_sync_events", bridge.events.toString())
             store.setState("last_error", "")

@@ -10,7 +10,7 @@ import android.database.sqlite.SQLiteOpenHelper
  * events and the sync cursor are written in one transaction, so the cursor never
  * moves past data that is not stored.
  */
-class Store private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "health.db", null, 1) {
+class Store private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "health.db", null, 2) {
     class PendingBatch(
         val id: Long,
         val serial: String,
@@ -19,13 +19,17 @@ class Store private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "health.db
         val tags: ByteArray,
         val timestamps: IntArray,
         val bodies: List<ByteArray>,
+        /** Wall-clock pairing for the newest ring timestamp, set on the last batch of a sync. */
+        val anchorRingTs: Long?,
+        val anchorUnix: Long?,
     )
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE state (k TEXT PRIMARY KEY, v TEXT NOT NULL)")
         db.execSQL(
             "CREATE TABLE batches (id INTEGER PRIMARY KEY AUTOINCREMENT, serial TEXT NOT NULL, " +
-                "cursor_before INTEGER NOT NULL, cursor_after INTEGER NOT NULL, created_ms INTEGER NOT NULL)",
+                "cursor_before INTEGER NOT NULL, cursor_after INTEGER NOT NULL, created_ms INTEGER NOT NULL, " +
+                "anchor_ts INTEGER, anchor_unix INTEGER, rejected INTEGER NOT NULL DEFAULT 0, rejected_reason TEXT)",
         )
         db.execSQL(
             "CREATE TABLE events (batch_id INTEGER NOT NULL, tag INTEGER NOT NULL, ts INTEGER NOT NULL, body BLOB NOT NULL)",
@@ -33,7 +37,14 @@ class Store private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "health.db
         db.execSQL("CREATE INDEX events_batch ON events(batch_id)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, old: Int, new: Int) {
+        if (old < 2) {
+            db.execSQL("ALTER TABLE batches ADD COLUMN anchor_ts INTEGER")
+            db.execSQL("ALTER TABLE batches ADD COLUMN anchor_unix INTEGER")
+            db.execSQL("ALTER TABLE batches ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE batches ADD COLUMN rejected_reason TEXT")
+        }
+    }
 
     fun state(key: String): String? =
         readableDatabase.rawQuery("SELECT v FROM state WHERE k=?", arrayOf(key)).use {
@@ -86,13 +97,44 @@ class Store private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "health.db
     }
 
     fun pendingCount(): Int =
-        readableDatabase.rawQuery("SELECT COUNT(*) FROM batches", null).use { it.moveToFirst(); it.getInt(0) }
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM batches WHERE rejected=0", null).use { it.moveToFirst(); it.getInt(0) }
+
+    fun rejectedCount(): Int =
+        readableDatabase.rawQuery("SELECT COUNT(*) FROM batches WHERE rejected=1", null).use { it.moveToFirst(); it.getInt(0) }
+
+    fun maxBatchId(): Long =
+        readableDatabase.rawQuery("SELECT COALESCE(MAX(id), 0) FROM batches", null).use { it.moveToFirst(); it.getLong(0) }
+
+    /** Attaches the sync's anchor to its newest batch, if this sync stored one (id > [afterId]). */
+    fun setAnchor(afterId: Long, ringTs: Long, unix: Long) {
+        writableDatabase.execSQL(
+            "UPDATE batches SET anchor_ts=?, anchor_unix=? WHERE id=(SELECT MAX(id) FROM batches) AND id>?",
+            arrayOf<Any>(ringTs, unix, afterId),
+        )
+    }
+
+    /** Moves a batch the HTPC permanently refused out of the queue. Its data stays here. */
+    fun markRejected(id: Long, reason: String) {
+        writableDatabase.execSQL("UPDATE batches SET rejected=1, rejected_reason=? WHERE id=?", arrayOf<Any>(reason, id))
+    }
+
+    /** Gives rejected batches another try (on a manual sync). */
+    fun requeueRejected() {
+        writableDatabase.execSQL("UPDATE batches SET rejected=0 WHERE rejected=1")
+    }
 
     fun nextPending(): PendingBatch? {
         val db = readableDatabase
         val head = db.rawQuery(
-            "SELECT id, serial, cursor_before, cursor_after FROM batches ORDER BY id LIMIT 1", null,
-        ).use { if (it.moveToFirst()) listOf(it.getLong(0), it.getString(1), it.getLong(2), it.getLong(3)) else null }
+            "SELECT id, serial, cursor_before, cursor_after, anchor_ts, anchor_unix FROM batches WHERE rejected=0 ORDER BY id LIMIT 1", null,
+        ).use {
+            if (it.moveToFirst()) {
+                listOf(
+                    it.getLong(0), it.getString(1), it.getLong(2), it.getLong(3),
+                    if (it.isNull(4)) null else it.getLong(4), if (it.isNull(5)) null else it.getLong(5),
+                )
+            } else null
+        }
             ?: return null
         val tags = ArrayList<Byte>()
         val stamps = ArrayList<Int>()
@@ -107,6 +149,7 @@ class Store private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "health.db
         return PendingBatch(
             head[0] as Long, head[1] as String, head[2] as Long, head[3] as Long,
             tags.toByteArray(), stamps.toIntArray(), bodies,
+            head[4] as Long?, head[5] as Long?,
         )
     }
 

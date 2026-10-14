@@ -25,6 +25,7 @@ class LiveHrActivity : Activity() {
     private lateinit var stopButton: Button
     @Volatile private var handle = 0L
     @Volatile private var finished = false
+    @Volatile private var streaming = false
     private var liveSince = 0L
 
     private val seconds = 60
@@ -112,6 +113,7 @@ class LiveHrActivity : Activity() {
         if (needed.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) {
             end("Bluetooth permission needed; grant it from the main screen"); return
         }
+        ActivityLog.init(this)
         val store = Store.get(this)
         val keyHex = Secrets.get(this, "ring_key")
         val address = store.state("ring_address")
@@ -120,21 +122,34 @@ class LiveHrActivity : Activity() {
         synchronized(RingLock.lock) {
             if (finished) return
             state("Looking for ring")
-            val hit = RingFinder.find(this, 30_000, lowLatency = true) { it.device.address == address }
-            if (hit == null) { end("Ring not seen in 30 s"); return }
+            ActivityLog.add("Live HR: looking for ring $address")
+            val seen = HashSet<String>()
+            val hit = RingFinder.find(this, 30_000, lowLatency = true, onSeen = { r ->
+                if (seen.add(r.device.address)) ActivityLog.add("Live HR: advert ${r.device.address} ${r.rssi} dBm" + if (r.device.address == address) " (ours)" else " (other)")
+            }) { it.device.address == address }
+            if (hit == null) { ActivityLog.add("Live HR: ring not seen in 30 s; ${seen.size} Oura advert address(es) heard"); end("Ring not seen in 30 s"); return }
             if (finished) return
 
             state("Connecting")
             val h = NativeSync.nativeOpen()
             handle = h
-            val link = RingLink(this, {}) { NativeSync.nativePush(h, it) }
+            val link = RingLink(this, { ActivityLog.add("Live HR: $it") }) { NativeSync.nativePush(h, it) }
             try {
                 if (!link.open(hit.device)) { end("Could not open the ring link"); return }
-                state("Authenticating")
+                state("Authenticating"); ActivityLog.add("Live HR: link open, authenticating")
                 val bridge = object : NativeSync.Bridge {
                     override fun write(frame: ByteArray) = link.write(frame)
                     override fun onSerial(serial: String) = true
-                    override fun onInfo(key: String, value: String) = true
+                    override fun onInfo(key: String, value: String): Boolean {
+                        if (key == "note") ActivityLog.add("Live HR: $value")
+                        if (key == "frame") ActivityLog.add("Live HR: frame $value")
+                        if (key == "stage" && value == "streaming") {
+                            streaming = true
+                            ActivityLog.add("Live HR: authenticated, waiting for beats (ring must be worn)")
+                            state("Waiting for a heartbeat; the ring must be worn")
+                        }
+                        return true
+                    }
                     override fun onBatch(tags: ByteArray, timestamps: IntArray, bodies: Array<ByteArray>, nextCursor: Int, bytesLeft: Int) = false
                     override fun onBeat(bpm: Int, ibiMs: Int): Boolean {
                         runOnUiThread {
@@ -145,8 +160,8 @@ class LiveHrActivity : Activity() {
                         return true
                     }
                 }
-                runOnUiThread { liveSince = System.currentTimeMillis() }
                 val err = NativeSync.nativeLiveHr(h, keyHex.hexToBytes(), seconds, bridge)
+                ActivityLog.add(if (err == null) "Live HR: finished" else "Live HR: failed: $err")
                 end(err ?: "Finished", err != null)
             } finally {
                 link.close()

@@ -36,7 +36,11 @@ class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val manual = inputData.getBoolean("manual", false)
         // Scheduled runs scan up to 3 minutes; a manual press waits one minute, then reports.
-        SyncRunner.run(applicationContext, if (manual) 60_000 else 180_000)
+        ActivityLog.init(applicationContext)
+        ActivityLog.add(if (manual) "Sync started" else "Scheduled sync started")
+        if (manual) Store.get(applicationContext).requeueRejected()
+        val err = SyncRunner.run(applicationContext, if (manual) 60_000 else 180_000) { ActivityLog.add(it) }
+        ActivityLog.add(if (err == null) "Sync finished" else "Sync failed: $err")
         if (Store.get(applicationContext).pendingCount() > 0) Scheduler.retryUpload(applicationContext)
         // The outcome is stored for the status screen; a missing ring is not a reason to retry hot.
         Result.success()

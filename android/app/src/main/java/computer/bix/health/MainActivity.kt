@@ -44,14 +44,14 @@ class MainActivity : Activity() {
     private lateinit var pairButton: Button
 
     /** Card with a 7dp accent bar on the left, rounded on the left corners only. */
-    private fun card(accent: Int, content: LinearLayout): LinearLayout {
+    private fun card(accent: Int, content: LinearLayout, fill: Boolean = false): LinearLayout {
         val bar = android.view.View(this).apply {
             background = android.graphics.drawable.GradientDrawable().apply {
                 setColor(accent)
                 cornerRadii = floatArrayOf(dp(16).toFloat(), dp(16).toFloat(), 0f, 0f, 0f, 0f, dp(16).toFloat(), dp(16).toFloat())
             }
         }
-        content.setPadding(dp(16), dp(14), dp(16), dp(14))
+        content.setPadding(dp(14), dp(10), dp(14), dp(10))
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             background = android.graphics.drawable.GradientDrawable().apply {
@@ -61,13 +61,13 @@ class MainActivity : Activity() {
             elevation = dp(4).toFloat()
             layoutParams = LinearLayout.LayoutParams(-1, -2).apply { setMargins(0, dp(6), 0, dp(6)) }
             addView(bar, LinearLayout.LayoutParams(dp(7), -1))
-            addView(content, LinearLayout.LayoutParams(0, -2, 1f))
+            addView(content, LinearLayout.LayoutParams(0, if (fill) -1 else -2, 1f))
         }
     }
 
     private fun label(text: String) = TextView(this).apply {
         this.text = text
-        textSize = 12f
+        textSize = 11f
         setTextColor(white(0.54f))
     }
 
@@ -87,25 +87,81 @@ class MainActivity : Activity() {
             cornerRadius = dp(26).toFloat()
             if (filled) setColor(verdigris) else { setColor(0); setStroke(dp(1), verdigris) }
         }
-        layoutParams = LinearLayout.LayoutParams(-1, dp(52)).apply { setMargins(0, dp(6), 0, dp(6)) }
+        layoutParams = LinearLayout.LayoutParams(-1, dp(52)).apply { setMargins(0, dp(4), 0, dp(4)) }
         setOnClickListener { action() }
+    }
+
+    private val logListener: () -> Unit = { showLog() }
+    private lateinit var logScroll: ScrollView
+
+    private fun cell(key: String, name: String) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        addView(label(name))
+        addView(rows[key])
+    }
+
+    private fun pair(left: LinearLayout, right: LinearLayout?, top: Int = 10) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(0, dp(if (top == 10) 6 else top), 0, 0)
+        addView(left, LinearLayout.LayoutParams(0, -2, 1f))
+        addView(right ?: android.view.View(this@MainActivity), LinearLayout.LayoutParams(0, -2, 1f))
+    }
+
+    /** Small scrolling view of recent activity, with an Expand button on its left. */
+    private fun logViewport(): LinearLayout {
+        log = TextView(this).apply {
+            typeface = android.graphics.Typeface.MONOSPACE
+            textSize = 11f
+            setTextColor(white(0.7f))
+        }
+        logScroll = ScrollView(this).apply { addView(log) }
+        val expand = Button(this).apply {
+            text = "Expand"
+            isAllCaps = false
+            textSize = 12f
+            stateListAnimator = null
+            elevation = 0f
+            minHeight = 0
+            minimumHeight = 0
+            setPadding(dp(10), 0, dp(10), 0)
+            setTextColor(verdigris)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                cornerRadius = dp(14).toFloat(); setColor(0); setStroke(dp(1), verdigris)
+            }
+            setOnClickListener { startActivity(android.content.Intent(this@MainActivity, LogActivity::class.java)) }
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            addView(expand, LinearLayout.LayoutParams(-2, dp(28)))
+            addView(label("Activity").apply { setPadding(dp(10), 0, 0, 0) })
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(header)
+            addView(logScroll, LinearLayout.LayoutParams(-1, 0, 1f).apply { topMargin = dp(6) })
+        }
+    }
+
+    private fun showLog() {
+        log.text = ActivityLog.text()
+        logScroll.post { logScroll.fullScroll(android.view.View.FOCUS_DOWN) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        log = TextView(this).apply {
-            typeface = android.graphics.Typeface.MONOSPACE
-            textSize = 12f
-            setTextColor(white(0.54f))
-        }
+        ActivityLog.init(this)
 
         rows = linkedMapOf(
-            "ring" to value(), "battery" to value(), "firmware" to value(), "sync" to value(), "push" to value(), "queue" to value(),
+            "ring" to value(), "battery" to value(), "firmware" to value(), "features" to value(),
+            "sync" to value(), "push" to value(),
         )
-        val statusBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        for ((key, name) in listOf("ring" to "Ring", "battery" to "Ring battery", "firmware" to "Ring firmware", "sync" to "Last sync from ring", "push" to "Last push to HTPC", "queue" to "Waiting to push")) {
-            statusBox.addView(label(name).apply { if (key != "ring") setPadding(0, dp(10), 0, 0) })
-            statusBox.addView(rows[key])
+        rows.values.forEach { it.textSize = 14f }
+        val statusBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(pair(cell("ring", "Ring"), cell("battery", "Ring battery"), 0))
+            addView(pair(cell("firmware", "Ring firmware"), cell("features", "Ring features")))
+            addView(pair(cell("sync", "Last sync from ring"), cell("push", "Last push to HTPC")))
         }
         problemText = value()
         problemCard = card(peach, LinearLayout(this).apply {
@@ -114,22 +170,27 @@ class MainActivity : Activity() {
             addView(problemText)
         }).apply { visibility = android.view.View.GONE }
 
+        fun halfWidth(v: Button) = v.also {
+            it.layoutParams = LinearLayout.LayoutParams(0, dp(52), 1f).apply { setMargins(dp(4), dp(4), dp(4), 0) }
+        }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(24))
+            setPadding(dp(12), dp(6), dp(12), dp(10))
             addView(card(verdigris, statusBox))
             addView(problemCard)
-            addView(button("Live heart rate", true) { requirePermissions { startActivity(android.content.Intent(this@MainActivity, LiveHrActivity::class.java)) } }
-                .also { (it.layoutParams as LinearLayout.LayoutParams).topMargin = dp(18) })
-            addView(button("Sync now", false) { requirePermissions { Scheduler.syncNow(this@MainActivity); append("Sync requested") } })
-            addView(button("Full Stats", false) { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(STATS_URL))) })
+            addView(card(verdigris, logViewport(), fill = true).also { c ->
+                c.layoutParams = LinearLayout.LayoutParams(-1, 0, 1f).apply { setMargins(0, dp(6), 0, dp(6)) }
+            })
             pairButton = button("Pair ring", false) { requirePermissions { confirmPair() } }
             pairButton.visibility = android.view.View.GONE
             addView(pairButton)
-            addView(label("Diagnostics").apply { setPadding(dp(4), dp(18), 0, dp(2)) })
-            addView(button("Scan for ring (60 s)", false) { requirePermissions { scanOnly() } })
-            addView(label("Activity").apply { setPadding(dp(4), dp(18), 0, dp(6)) })
-            addView(log)
+            addView(button("Live heart rate", true) { requirePermissions { startActivity(android.content.Intent(this@MainActivity, LiveHrActivity::class.java)) } })
+            addView(LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(-dp(4), 0, -dp(4), 0)
+                addView(halfWidth(button("Sync now", false) { requirePermissions { Scheduler.syncNow(this@MainActivity); append("Sync requested") } }))
+                addView(halfWidth(button("Full Stats", false) { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(STATS_URL))) }))
+            })
         }
         val appBar = TextView(this).apply {
             text = "Health"
@@ -143,7 +204,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(bg)
             addView(appBar, LinearLayout.LayoutParams(-1, -2))
-            addView(ScrollView(this@MainActivity).apply { addView(body) }, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
         }
         // Edge to edge: keep the app bar and content clear of the system bars.
         root.setOnApplyWindowInsetsListener { v, insets ->
@@ -155,16 +216,20 @@ class MainActivity : Activity() {
         setContentView(root)
         Secrets.importProvisioning(this)?.let { append(it) }
         Scheduler.ensurePeriodic(this)
+        showLog()
     }
 
     override fun onResume() {
         super.onResume()
         Secrets.importProvisioning(this)?.let { append(it) }
         handler.post(refresh)
+        ActivityLog.listen(logListener)
+        showLog()
     }
 
     override fun onPause() {
         handler.removeCallbacks(refresh)
+        ActivityLog.unlisten(logListener)
         super.onPause()
     }
 
@@ -184,11 +249,14 @@ class MainActivity : Activity() {
         pairButton.visibility = if (ring == "Not paired") android.view.View.VISIBLE else android.view.View.GONE
         rows["battery"]?.text = s.state("ring_battery")?.let { "$it%" } ?: "Unknown"
         rows["firmware"]?.text = s.state("ring_firmware") ?: "Unknown"
+        rows["features"]?.text = s.state("ring_features")?.let { if (it == "ok") "Set" else "Some failed" } ?: "Not set"
         rows["sync"]?.text = at("last_sync_ms") + events
-        rows["push"]?.text = at("last_push_ms")
         val n = s.pendingCount()
-        rows["queue"]?.text = if (n == 1) "1 batch" else "$n batches"
-        val problem = listOf(s.state("last_error"), s.state("last_push_error")).filter { !it.isNullOrEmpty() }
+        rows["push"]?.text = at("last_push_ms") + if (n == 0) "" else "\n" + (if (n == 1) "1 batch waiting" else "$n batches waiting")
+        val rejected = s.rejectedCount()
+        val rejectedNote = if (rejected == 0) null else
+            (if (rejected == 1) "1 batch" else "$rejected batches") + " rejected by the HTPC, kept on the phone. Sync now retries."
+        val problem = listOf(s.state("last_error"), s.state("last_push_error"), rejectedNote).filter { !it.isNullOrEmpty() }
         problemCard.visibility = if (problem.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
         problemText.text = problem.joinToString("\n")
     }
@@ -212,17 +280,6 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private fun scanOnly() = runBusy("Scanning") {
-        val seen = java.util.concurrent.atomic.AtomicInteger()
-        RingFinder.find(this, 60_000, lowLatency = false) { r ->
-            append("${SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())}  ${r.device.address}  ${r.rssi} dBm")
-            seen.incrementAndGet()
-            false
-        }
-        append("Scan finished: ${seen.get()} adverts")
-        null
-    }
-
     private fun runBusy(what: String, body: () -> String?) {
         if (busy) { append("Already busy"); return }
         busy = true
@@ -234,5 +291,5 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    private fun append(line: String) = runOnUiThread { log.append(line + "\n") }
+    private fun append(line: String) = ActivityLog.add(line)
 }

@@ -24,6 +24,7 @@ class SessionBridge(
         when (key) {
             "battery" -> { store.setState("ring_battery", value); store.setState("ring_info_ms", System.currentTimeMillis().toString()) }
             "firmware" -> store.setState("ring_firmware", value)
+            "feature_modes" -> store.setState("feature_modes", value)
             "features" -> {
                 store.setState("ring_features", value)
                 onProgress("Ring features: $value")

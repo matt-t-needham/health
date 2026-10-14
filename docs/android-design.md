@@ -198,7 +198,7 @@ is still bonded to the HTPC (see the spike results). Built:
   https://health.bix.computer in the browser); ring battery and firmware on
   the status card (read each sync and after pairing); after pairing the
   bridge applies the ring features the HTPC used to hold (daytime HR, SpO2,
-  resting HR, real steps and CVA PPG automatic, exercise HR off) and reports
+  resting HR, real steps and CVA PPG automatic; exercise HR is left alone because a reset ring has it off and refuses an explicit OFF with result 0x20) and reports
   any that fail in the activity log; a "Live heart rate" screen (60 s,
   on demand, nothing stored or uploaded; Stop or leaving the screen ends it
   and restores automatic mode). Syncs, pairing and live HR share one lock
@@ -231,3 +231,24 @@ is still bonded to the HTPC (see the spike results). Built:
   Sequence: final HTPC sync, reset, phone pairs, cursor starts at 0 (the
   store dedupes on `UNIQUE(serial, tag, ring_timestamp, body)`).
   Never onboard with the Oura app afterwards.
+
+### First pairing, 2026-10-13 (S22, Ring 4 fw 2.12.5)
+
+Pairing a factory-reset ring worked on the first attempt: Android bond ok,
+MTU 247, all four notify characteristics subscribed, serial check passed, key
+installed and verified (battery 98% read over the authenticated link). The
+ring advertised at -73 dBm with the phone next to it. Features: five of six
+set; `exercise_hr` OFF was refused with 0x20 (now skipped). Not yet run: a
+sync, live HR, the HTPC relay.
+
+### Live heart rate, 2026-10-13
+
+Works on the Ring 4 (fw 2.12.5) once the session sends both commands the
+official app uses: `SetFeatureMode(DAYTIME_HR, CONNECTED_LIVE)` (`2f03220203`)
+and `SetFeatureSubscription(DAYTIME_HR, LATEST)` (`2f03260202`). open_oura's
+`live_heart_rate` sends only the first; the ring then ACKs and stays silent
+(three worn 60 s runs, zero beat frames). With both, beats arrive as ext
+`0x28` frames in bursts every 10-20 s, each carrying an IBI with a validity
+nibble; only validity 1 is shown (others seen: 0, 2, 3). First run: 67 bpm,
+IBI 886 ms. The bridge undoes both on exit, and every sync re-applies the
+feature modes in case a session is cut off. Worth reporting upstream.
