@@ -144,15 +144,17 @@ fn push_info(env: &mut JNIEnv, bridge: &JObject, key: &str, value: &str) {
     }
 }
 
-/// Features to hold on the ring, matching the HTPC's feature_modes.json
-/// (all automatic). Exercise HR is left alone: a reset ring has it off already, and
-/// asking for OFF is refused with result 0x20.
+/// Features to hold on the ring (1 = automatic, 0 = off). Exercise HR is left alone:
+/// a reset ring has it off already, and asking for OFF is refused with result 0x20.
+/// SpO2 and the CVA PPG sampler are off while we baseline this ring's (worn-out)
+/// battery drain: CVA needs Oura's model to be any use, and SpO2 feeds only the
+/// dashboard's blood-oxygen panel.
 const FEATURES: &[(&str, u8, u8)] = &[
     ("daytime_hr", 0x02, 1),
-    ("spo2", 0x04, 1),
+    ("spo2", 0x04, 0),
     ("resting_hr", 0x08, 1),
     ("real_steps", 0x0b, 1),
-    ("cva_ppg", 0x0d, 1),
+    ("cva_ppg", 0x0d, 0),
 ];
 
 /// Applies [`FEATURES`]; returns "ok" or a list of the ones that failed.

@@ -107,7 +107,7 @@ class MainActivity : Activity() {
         addView(right ?: android.view.View(this@MainActivity), LinearLayout.LayoutParams(0, -2, 1f))
     }
 
-    /** Small scrolling view of recent activity, with an Expand button on its left. */
+    /** Small scrolling view of recent activity, with an Expand button at the right of its header. */
     private fun logViewport(): LinearLayout {
         log = TextView(this).apply {
             typeface = android.graphics.Typeface.MONOSPACE
@@ -133,8 +133,8 @@ class MainActivity : Activity() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = android.view.Gravity.CENTER_VERTICAL
+            addView(label("Activity"), LinearLayout.LayoutParams(0, -2, 1f))
             addView(expand, LinearLayout.LayoutParams(-2, dp(28)))
-            addView(label("Activity").apply { setPadding(dp(10), 0, 0, 0) })
         }
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -153,14 +153,12 @@ class MainActivity : Activity() {
         ActivityLog.init(this)
 
         rows = linkedMapOf(
-            "ring" to value(), "battery" to value(), "firmware" to value(), "features" to value(),
-            "sync" to value(), "push" to value(),
+            "ring" to value(), "battery" to value(), "sync" to value(), "push" to value(),
         )
         rows.values.forEach { it.textSize = 14f }
         val statusBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(pair(cell("ring", "Ring"), cell("battery", "Ring battery"), 0))
-            addView(pair(cell("firmware", "Ring firmware"), cell("features", "Ring features")))
             addView(pair(cell("sync", "Last sync from ring"), cell("push", "Last push to HTPC")))
         }
         problemText = value()
@@ -247,9 +245,7 @@ class MainActivity : Activity() {
         rows["ring"]?.text = ring
         // Pairing is only offered when there is no usable bond.
         pairButton.visibility = if (ring == "Not paired") android.view.View.VISIBLE else android.view.View.GONE
-        rows["battery"]?.text = s.state("ring_battery")?.let { "$it%" } ?: "Unknown"
-        rows["firmware"]?.text = s.state("ring_firmware") ?: "Unknown"
-        rows["features"]?.text = s.state("ring_features")?.let { if (it == "ok") "Set" else "Some failed" } ?: "Not set"
+        rows["battery"]?.text = batteryText(s)
         rows["sync"]?.text = at("last_sync_ms") + events
         val n = s.pendingCount()
         rows["push"]?.text = at("last_push_ms") + if (n == 0) "" else "\n" + (if (n == 1) "1 batch waiting" else "$n batches waiting")
@@ -259,6 +255,14 @@ class MainActivity : Activity() {
         val problem = listOf(s.state("last_error"), s.state("last_push_error"), rejectedNote).filter { !it.isNullOrEmpty() }
         problemCard.visibility = if (problem.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
         problemText.text = problem.joinToString("\n")
+    }
+
+    /** Reported percent and the last logged voltage, plus the ring's voltage-based gauge, so a disagreement shows. */
+    private fun batteryText(s: Store): String {
+        val pct = s.state("ring_battery")?.let { "$it%" } ?: "Unknown"
+        val volts = s.state("ring_voltage_mv")?.toIntOrNull()?.let { " · %.2f V".format(Locale.US, it / 1000.0) } ?: ""
+        val gauge = s.state("ring_gauge_pct")?.let { "\nGauge $it%" } ?: ""
+        return pct + volts + gauge
     }
 
     private fun requirePermissions(then: () -> Unit) {

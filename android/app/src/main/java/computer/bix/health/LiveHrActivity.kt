@@ -127,7 +127,9 @@ class LiveHrActivity : Activity() {
             val hit = RingFinder.find(this, 30_000, lowLatency = true, onSeen = { r ->
                 if (seen.add(r.device.address)) ActivityLog.add("Live HR: advert ${r.device.address} ${r.rssi} dBm" + if (r.device.address == address) " (ours)" else " (other)")
             }) { it.device.address == address }
-            if (hit == null) { ActivityLog.add("Live HR: ring not seen in 30 s; ${seen.size} Oura advert address(es) heard"); end("Ring not seen in 30 s"); return }
+            if (hit == null) ActivityLog.add("Live HR: ring not seen in 30 s; ${seen.size} Oura advert address(es) heard; trying to connect to the bond directly")
+            val dev = hit?.device ?: RingFinder.bondedDevice(this, address)
+            if (dev == null) { end("Ring bond is gone; pair again"); return }
             if (finished) return
 
             state("Connecting")
@@ -135,7 +137,9 @@ class LiveHrActivity : Activity() {
             handle = h
             val link = RingLink(this, { ActivityLog.add("Live HR: $it") }) { NativeSync.nativePush(h, it) }
             try {
-                if (!link.open(hit.device)) { end("Could not open the ring link"); return }
+                if (!link.open(dev, timeoutSec = if (hit == null) 30 else 45, autoConnect = hit == null)) {
+                    end(if (hit == null) "Ring not seen in 30 s, and a direct connect failed" else "Could not open the ring link", true); return
+                }
                 state("Authenticating"); ActivityLog.add("Live HR: link open, authenticating")
                 val bridge = object : NativeSync.Bridge {
                     override fun write(frame: ByteArray) = link.write(frame)

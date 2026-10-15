@@ -55,6 +55,12 @@ class LogActivity : Activity() {
             setPadding(dp(16), dp(12), dp(16), dp(12))
         }
         scroll = ScrollView(this).apply { addView(text) }
+        val ringInfo = TextView(this).apply {
+            this.text = ringInfo()
+            textSize = 13f
+            setTextColor(Color.argb(200, 255, 255, 255))
+            setPadding(dp(16), dp(12), dp(16), dp(4))
+        }
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setPadding(dp(8), dp(8), dp(8), dp(12))
@@ -65,6 +71,7 @@ class LogActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(getColor(R.color.bg_dark))
             addView(appBar, LinearLayout.LayoutParams(-1, -2))
+            addView(ringInfo, LinearLayout.LayoutParams(-1, -2))
             addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
             addView(buttons, LinearLayout.LayoutParams(-1, -2))
         }
@@ -84,6 +91,23 @@ class LogActivity : Activity() {
     private fun show() {
         text.text = ActivityLog.text()
         scroll.post { scroll.fullScroll(android.view.View.FOCUS_DOWN) }
+    }
+
+    /** Firmware, then one line per ring feature as the ring last reported it. */
+    private fun ringInfo(): String {
+        val s = Store.get(this)
+        val names = linkedMapOf(
+            "daytime_hr" to "Daytime HR", "resting_hr" to "Resting HR", "real_steps" to "Steps",
+            "spo2" to "SpO2", "cva_ppg" to "CVA", "exercise_hr" to "Exercise HR", "experimental" to "Experimental",
+        )
+        val o = s.state("feature_modes")?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
+        val lines = mutableListOf("• Ring firmware: ${s.state("ring_firmware") ?: "Unknown"}")
+        if (o == null) lines += "• Features: not read yet"
+        else names.filterKeys { o.has(it) }.forEach { (k, name) ->
+            lines += "• $name: " + when (o.getInt(k)) { 0 -> "off"; 1 -> "on"; 3 -> "live"; else -> "mode ${o.getInt(k)}" }
+        }
+        s.state("ring_features")?.takeIf { it != "ok" }?.let { lines += "• Last feature setup failed: $it" }
+        return lines.joinToString("\n")
     }
 
     private fun copyAll() {

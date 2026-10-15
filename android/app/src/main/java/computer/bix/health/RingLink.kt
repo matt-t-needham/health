@@ -31,6 +31,7 @@ class RingLink(
     private var gatt: BluetoothGatt? = null
     private var writeChar: BluetoothGattCharacteristic? = null
     private val connected = CountDownLatch(1)
+    @Volatile private var up = false
     private val discovered = CountDownLatch(1)
     private val writeDone = Semaphore(0)
     private val descriptorDone = Semaphore(0)
@@ -42,8 +43,10 @@ class RingLink(
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             log("conn state=$newState status=$status")
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                up = true
                 connected.countDown()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                up = false
                 connected.countDown()
                 discovered.countDown()
             }
@@ -81,12 +84,20 @@ class RingLink(
         }
     }
 
-    /** Connects, negotiates MTU, discovers services and subscribes. False on any failure. */
-    fun open(device: BluetoothDevice, timeoutSec: Long = 45): Boolean {
-        log("bondState=${device.bondState}")
-        gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+    /**
+     * Connects, negotiates MTU, discovers services and subscribes. False on any failure.
+     * [autoConnect] waits for the bonded ring's own reconnect adverts (which a filtered
+     * scan can't see) until [timeoutSec], instead of the stack's ~10 s direct-connect limit.
+     */
+    fun open(device: BluetoothDevice, timeoutSec: Long = 45, autoConnect: Boolean = false): Boolean {
+        log("bondState=${device.bondState}" + if (autoConnect) " (waiting for the ring to reconnect)" else "")
+        gatt = device.connectGatt(context, autoConnect, callback, BluetoothDevice.TRANSPORT_LE)
         if (!connected.await(timeoutSec, TimeUnit.SECONDS)) {
             log("connect timed out after ${timeoutSec}s")
+            return false
+        }
+        if (!up) {
+            log("connect failed")
             return false
         }
         val g = gatt ?: return false

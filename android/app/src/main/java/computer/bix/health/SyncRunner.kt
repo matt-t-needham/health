@@ -30,16 +30,20 @@ object SyncRunner {
         val hit = RingFinder.find(ctx, windowMs, lowLatency = false, onSeen = { x ->
             if (seen.add(x.device.address)) log("advert ${x.device.address} ${x.rssi} dBm" + if (x.device.address == address) " (ours)" else " (other)")
         }) { it.device.address == address }
-        if (hit == null) {
-            store.setState("ring_state", "not seen")
-            return note(store, "Ring not seen in ${windowMs / 1000} s")
-        }
-        store.setState("ring_seen_ms", System.currentTimeMillis().toString())
+        // After a link drops mid-session the ring advertises only to its bonded central,
+        // without manufacturer data, until a session completes. The filtered scan never
+        // sees those adverts; a background connect to the bond does.
+        if (hit == null) log("ring not seen in ${windowMs / 1000} s; trying to connect to the bond directly")
+        val target = hit?.device ?: dev
 
         val handle = NativeSync.nativeOpen()
         val link = RingLink(ctx, log) { NativeSync.nativePush(handle, it) }
         try {
-            if (!link.open(hit.device)) return note(store, "Could not open the ring link")
+            if (!link.open(target, timeoutSec = if (hit == null) 60 else 45, autoConnect = hit == null)) {
+                if (hit == null) store.setState("ring_state", "not seen")
+                return note(store, if (hit == null) "Ring not seen in ${windowMs / 1000} s, and a direct connect failed" else "Could not open the ring link")
+            }
+            store.setState("ring_seen_ms", System.currentTimeMillis().toString())
             store.setState("ring_state", "connected")
             val bridge = SessionBridge(link, store, serial, log)
             val lastBatchBefore = store.maxBatchId()
