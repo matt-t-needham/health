@@ -1,0 +1,27 @@
+[package]
+name = "health-ingest"
+description = "Commits health-relay spool files into oura.db with the dashboard's own store and decoders"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Built inside the open_health checkout (see ../Dockerfile, `ingest` stage):
+# this crate sits at /src/health-ingest, so `../vendor/oura-store` is the very
+# store the pinned dashboard uses, and oura-protocol is pinned to the same
+# open_oura rev as open_health's Cargo.toml.
+[dependencies]
+oura-protocol = { git = "https://github.com/Th0rgal/open_oura", rev = "4f7957d3304c4084f0e1e703f3d84606bf10b781" }
+oura-store = { path = "../vendor/oura-store" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+anyhow = "1"
+
+[dev-dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Its own workspace, not a member of open_health's.
+[workspace]
+
+[profile.release]
+strip = true
