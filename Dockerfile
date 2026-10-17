@@ -13,7 +13,7 @@ RUN apt-get update \
 ARG OPEN_HEALTH_REV=08e1b868e1c5ad9c5c63c2adedaee86c3e1c1bfa
 RUN git clone https://github.com/Th0rgal/open_health /src \
  && git -C /src checkout --detach "$OPEN_HEALTH_REV"
-# Our changes to upstream's web UI (patches/README.md). `git apply` refuses a
+# Our changes to upstream's web UI and sleep staging (patches/README.md). `git apply` refuses a
 # patch that no longer matches, so a pin bump fails the build rather than
 # shipping a half-patched page.
 COPY patches/ /patches/

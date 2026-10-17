@@ -1,0 +1,125 @@
+diff --git a/dashboard/web/app.js b/dashboard/web/app.js
+index 4b5121d..7b72cb4 100644
+--- a/dashboard/web/app.js
++++ b/dashboard/web/app.js
+@@ -655,8 +655,9 @@ document.addEventListener("keydown", (e) => {
+   }
+ });
+ 
+-// ── day page: one scrolling page — Sleep, Activity, Heart rate — on one time axis ─
+-// Every chart plots against the same axis (dayAxis) and shares one cursor (dayCursor),
++// ── day page: one scrolling page — Sleep, Activity, Heart rate ─────────────────────
++// Activity and heart rate plot on the day axis (dayAxis), sleep on just its night
++// (nightAxis); all share one cursor (dayCursor),
+ // so a vertical line marks the same moment in all of them. `focus` ("sleep" |
+ // "activity" | "heart") scrolls to that section on open.
+ function openDayPage(d, ymd, focus = null, keepScroll = false) {
+@@ -688,9 +689,9 @@ function openDayPage(d, ymd, focus = null, keepScroll = false) {
+   const when = el("div", "rpt-when");
+   when.append(step(older, "‹", "Previous", "←"), el("div", "rpt-title", dayTitle(ymd)), step(newer, "›", "Next", "→"));
+   head.append(back, when, exp);
+-  const cursor = dayCursor(axis);
++  const cursor = dayCursor();
+   const body = el("div", "rpt-body");
+-  body.append(sleepSection(d, ymd, axis, cursor), activitySection(d, ymd, axis, cursor), heartSection(ymd, axis, cursor));
++  body.append(sleepSection(d, ymd, nightAxis(d, ymd, axis), cursor), activitySection(d, ymd, axis, cursor), heartSection(ymd, axis, cursor));
+   wrap.append(head, body);
+   const top = $("page").scrollTop;
+   showPage(wrap);
+@@ -708,8 +709,21 @@ function dayAxis(d, ymd) {
+   const dayStart = Date.UTC(y, mo - 1, dd) / 1000 - tz * 3600;
+   const n = nightForDay(d, ymd);
+   const t0 = n && n.start_unix != null && n.start_unix < dayStart ? Math.floor(n.start_unix / 3600) * 3600 : dayStart;
+-  const t1 = dayStart + 86400;
++  return timeAxis(tz, t0, dayStart + 86400, dayStart);
++}
++
++// The sleep section's axis: just the night, widened to whole hours. Falls back to the
++// day axis when the night has no unix times.
++function nightAxis(d, ymd, dayAx) {
++  const n = nightForDay(d, ymd);
++  if (!n || n.start_unix == null || n.end_unix == null || n.end_unix <= n.start_unix) return dayAx;
++  return timeAxis(d.tz || 0, Math.floor(n.start_unix / 3600) * 3600, Math.ceil(n.end_unix / 3600) * 3600, dayAx.dayStart);
++}
++
++function timeAxis(tz, t0, t1, dayStart) {
+   const pad = (v) => String(v).padStart(2, "0");
++  const spanH = (t1 - t0) / 3600;
++  const step = spanH <= 6 ? 1 : spanH <= 12 ? 2 : spanH <= 18 ? 3 : 6;
+   return {
+     t0, t1, dayStart,
+     frac: (t) => (t - t0) / (t1 - t0),
+@@ -718,12 +732,13 @@ function dayAxis(d, ymd) {
+       const s = (((Math.floor(t) + tz * 3600) % 86400) + 86400) % 86400;
+       return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}`;
+     },
+-    // 6-hourly ticks on the local clock, plus the axis start when it isn't one
++    // ticks every `step` hours on the local clock (6 for a whole day, denser for a
++    // night), plus the axis start when it isn't one
+     ticks() {
+       const out = [];
+       for (let t = Math.ceil(t0 / 3600) * 3600; t <= t1; t += 3600) {
+         const h = ((((t + tz * 3600) / 3600) % 24) + 24) % 24;
+-        if (h % 6 === 0 || t === t0) out.push({ f: (t - t0) / (t1 - t0), label: t === t1 ? "24" : pad(h) });
++        if (h % step === 0 || t === t0) out.push({ f: (t - t0) / (t1 - t0), label: t === t1 && h === 0 ? "24" : pad(h) });
+       }
+       return out;
+     },
+@@ -732,20 +747,22 @@ function dayAxis(d, ymd) {
+ 
+ // One cursor for the whole day page: hovering any timeline box draws the line at the
+ // same moment through every box, shows the clock in each box's pill, and swaps each
+-// row's summary for its value at that time. Boxes register as they render (heart rate
+-// arrives later and re-renders on the 15 min / 1 h switch); `onMove` hooks extra
+-// readouts, one per key.
+-function dayCursor(axis) {
++// row's summary for its value at that time. Boxes may have their own axis (sleep shows
++// only the night), so the cursor moves in time and each box places it on its own axis,
++// hiding the line where that moment is off its range. Boxes register as they render
++// (heart rate arrives later and re-renders on the 15 min / 1 h switch); `onMove` hooks
++// extra readouts, one per key.
++function dayCursor() {
+   let boxes = [];
+   const hooks = new Map();
+-  const show = (f) => {
++  const show = (t) => {
+     boxes = boxes.filter((b) => b.el.isConnected);
+-    const t = axis.at(f);
+     for (const b of boxes) {
+-      b.line.hidden = b.pill.hidden = false;
++      const f = b.axis.frac(t);
++      b.line.hidden = b.pill.hidden = f < 0 || f > 1;
+       b.line.style.setProperty("--f", f);
+       b.pill.style.setProperty("--f", f);
+-      b.pill.textContent = axis.clock(t);
++      b.pill.textContent = b.axis.clock(t);
+       for (const r of b.rows) r.val.textContent = r.valueAt(t);
+     }
+     hooks.forEach((fn) => fn(t));
+@@ -762,7 +779,7 @@ function dayCursor(axis) {
+       boxes.push(b);
+       const move = (e) => {
+         const r = b.el.querySelector(".tl-plot").getBoundingClientRect();
+-        show(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)));
++        show(b.axis.at(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width))));
+       };
+       b.plots.addEventListener("pointermove", move);
+       b.plots.addEventListener("pointerdown", move);
+@@ -799,7 +816,7 @@ function tlBox(axis, cursor, rows) {
+   plots.append(line, pill);
+   const axisRow = el("div", "tl-axis", ticks.map((k) => `<span style="--f:${k.f.toFixed(4)}">${k.label}</span>`).join(""));
+   box.append(plots, axisRow);
+-  cursor.add({ el: box, plots, line, pill, rows: live });
++  cursor.add({ el: box, axis, plots, line, pill, rows: live });
+   return box;
+ }
+ 
+@@ -968,7 +985,7 @@ function sleepInterpretation(d, n, m) {
+   return wrap;
+ }
+ 
+-// Sleep: stats, then the overnight lanes on the night's slice of the day axis — shown
++// Sleep: stats, then the overnight lanes on the night's own axis (nightAxis) — shown
+ // with or without a hypnogram (stages need Oura's SleepNet model; the signals don't) —
+ // then the stage-derived architecture and interpretation when stages exist.
+ function sleepSection(d, ymd, axis, cursor) {

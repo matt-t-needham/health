@@ -1,0 +1,359 @@
+diff --git a/crates/oura-summary/src/lib.rs b/crates/oura-summary/src/lib.rs
+index d4e3b40..0a48ffa 100644
+--- a/crates/oura-summary/src/lib.rs
++++ b/crates/oura-summary/src/lib.rs
+@@ -1068,6 +1068,33 @@ pub fn stage_night_from_signals(
+     hr_t: &[(i64, f64)],
+     hrv_t: &[(i64, f64)],
+     motion_t: &[(i64, f64)],
++) -> Vec<i64> {
++    stage_night_from_signals_with_activity(start_ds, end_ds, hr_t, hrv_t, motion_t, &[], &[])
++}
++
++/// A 30 s `sleep_acm_period` window whose largest 5 s accelerometer MAD reaches this
++/// counts as movement. Still sleep sits at 0.03–0.05; a roll-over reaches 2–100.
++const ACM_ACTIVE_MAD: f64 = 1.0;
++/// Quiet needed after the last movement before sleep onset (20 epochs = 10 min).
++const ONSET_QUIET_EPOCHS: usize = 20;
++/// Movements this close together (14 epochs = 7 min) belong to one bout of
++/// wakefulness when the ring itself declared activity inside it.
++const RING_WAKE_LINK_EPOCHS: usize = 14;
++
++/// [`stage_night_from_signals`] plus two Ring 4 streams it otherwise ignores:
++/// `acm_t`, the continuous accelerometer (`sleep_acm_period`, `(ds, max acm_mad)`,
++/// one per 30 s even when still, unlike `motion_event`), and `ring_active_t`, the
++/// times the ring itself switched to its "activity" state mid-night. Lying awake
++/// between fidgets leaves no motion at all, so the 6-of-10 rule misses it; the
++/// ring's own activity call marks the bout, and the movements around it bound it.
++pub fn stage_night_from_signals_with_activity(
++    start_ds: i64,
++    end_ds: i64,
++    hr_t: &[(i64, f64)],
++    hrv_t: &[(i64, f64)],
++    motion_t: &[(i64, f64)],
++    acm_t: &[(i64, f64)],
++    ring_active_t: &[i64],
+ ) -> Vec<i64> {
+     if end_ds <= start_ds {
+         return Vec::new();
+@@ -1143,14 +1170,37 @@ pub fn stage_night_from_signals(
+         )
+     };
+ 
++    // Movement per epoch from either stream. `acm_t` is stamped at the end of the
++    // 30 s window it describes.
++    let mut active: Vec<bool> = epoch_mo.iter().map(|&m| m > 0.0).collect();
++    for &(ds, mad) in acm_t {
++        let f = (ds - 150 - start_ds) as f64 / span_ds;
++        if mad >= ACM_ACTIVE_MAD && (0.0..1.0).contains(&f) {
++            active[(f * epochs as f64) as usize] = true;
++        }
++    }
++
+     let mut stages = vec![2i64; epochs];
+     let mut onset = 0usize;
+     let max_onset = (epochs / 4).min(120);
+-    for i in 0..max_onset {
+-        let end_chk = (i + 10).min(epochs);
+-        if (i..end_chk).all(|k| epoch_mo[k] <= 4.0) {
+-            onset = i;
+-            break;
++    if acm_t.is_empty() {
++        for i in 0..max_onset {
++            let end_chk = (i + 10).min(epochs);
++            if (i..end_chk).all(|k| epoch_mo[k] <= 4.0) {
++                onset = i;
++                break;
++            }
++        }
++    } else {
++        // Without the accelerometer a still epoch can't be told from a missing one, so
++        // the old rule only needs 5 min under 4 s of motion. With it, onset is the
++        // first epoch followed by 10 min of no movement at all.
++        for i in 0..max_onset {
++            let end_chk = (i + ONSET_QUIET_EPOCHS).min(epochs);
++            if (i..end_chk).all(|k| !active[k]) {
++                onset = i;
++                break;
++            }
+         }
+     }
+     for cell in &mut stages[..onset] {
+@@ -1196,6 +1246,42 @@ pub fn stage_night_from_signals(
+             }
+         }
+     }
++    // Ring-declared activity: wake from the first to the last of the movements linked
++    // to it (each within RING_WAKE_LINK_EPOCHS of the next).
++    for &ds in ring_active_t {
++        let f = (ds - start_ds) as f64 / span_ds;
++        if !(0.0..1.0).contains(&f) {
++            continue;
++        }
++        let at = (f * epochs as f64) as usize;
++        if at < onset || at >= wake_end {
++            continue;
++        }
++        let (mut lo, mut hi) = (at, at);
++        let mut k = at;
++        while k > onset {
++            k -= 1;
++            if active[k] {
++                lo = k;
++            }
++            if lo - k > RING_WAKE_LINK_EPOCHS {
++                break;
++            }
++        }
++        let mut k = at;
++        while k + 1 < wake_end {
++            k += 1;
++            if active[k] {
++                hi = k;
++            }
++            if k - hi > RING_WAKE_LINK_EPOCHS {
++                break;
++            }
++        }
++        for cell in &mut stages[lo..=hi] {
++            *cell = 4;
++        }
++    }
+ 
+     // 1) Recover N3 slow-wave sleep first on unfragmented motionless NREM stretches.
+     let mut refined =
+@@ -1242,11 +1328,29 @@ pub fn stage_nights_from_signals(db: &Path, sleep_ranges: &[[i64; 3]]) -> Option
+         let mut hr_t = Vec::new();
+         let mut hrv_t = Vec::new();
+         let mut motion_t = Vec::new();
++        let mut acm_t = Vec::new();
++        let mut ring_active_t = Vec::new();
+         for (ds, tag, jstr, _cu) in &events {
+             if *ds < start_ds - 600 || *ds > end_ds + 600 {
+                 continue;
+             }
+-            if *tag == 0x5d {
++            if *tag == 0x72 {
++                // sleep_acm_period: six 5 s accelerometer MADs per 30 s window
++                if let Ok(v) = serde_json::from_str::<Value>(jstr) {
++                    if let Some(max) = v["acm_mad"].as_array().and_then(|a| {
++                        a.iter().filter_map(Value::as_f64).reduce(f64::max)
++                    }) {
++                        acm_t.push((*ds, max));
++                    }
++                }
++            } else if *tag == 0x45 {
++                // state_change: the ring's own "activity" call
++                if let Ok(v) = serde_json::from_str::<Value>(jstr) {
++                    if v["text"].as_str() == Some("activity") {
++                        ring_active_t.push(*ds);
++                    }
++                }
++            } else if *tag == 0x5d {
+                 if let Ok(v) = serde_json::from_str::<Value>(jstr) {
+                     let step_ds = v["interval_min"].as_i64().unwrap_or(5).max(1) * 600;
+                     if let Some(a) = v["hr_bpm"].as_array() {
+@@ -1275,7 +1379,16 @@ pub fn stage_nights_from_signals(db: &Path, sleep_ranges: &[[i64; 3]]) -> Option
+         hr_t.sort_by_key(|&(ds, _)| ds);
+         hrv_t.sort_by_key(|&(ds, _)| ds);
+         motion_t.sort_by_key(|&(ds, _)| ds);
+-        let stages = stage_night_from_signals(start_ds, end_ds, &hr_t, &hrv_t, &motion_t);
++        acm_t.sort_by_key(|&(ds, _)| ds);
++        let stages = stage_night_from_signals_with_activity(
++            start_ds,
++            end_ds,
++            &hr_t,
++            &hrv_t,
++            &motion_t,
++            &acm_t,
++            &ring_active_t,
++        );
+         if stages.is_empty() {
+             results.push(Value::Null);
+             continue;
+@@ -1652,6 +1765,18 @@ fn autonomic_by_stage(
+     })
+ }
+ 
++/// Where a night extended past the ring's declared end (`raw_end_ds`) and its
++/// hypnogram scores every epoch of that extension awake, the number of epochs to keep
++/// so the night ends at the ring's call. `None` when there is nothing to trim.
++fn wake_extension_cut(stages: &[i64], start_ds: i64, end_ds: i64, raw_end_ds: i64) -> Option<usize> {
++    if stages.is_empty() || end_ds <= raw_end_ds || raw_end_ds <= start_ds {
++        return None;
++    }
++    let epoch_ds = (end_ds - start_ds) as f64 / stages.len() as f64;
++    let cut = (((raw_end_ds - start_ds) as f64 / epoch_ds).round() as usize).min(stages.len());
++    (cut > 0 && cut < stages.len() && stages[cut..].iter().all(|&c| c == 4)).then_some(cut)
++}
++
+ /// Count maximal runs of `code` at least `min_len` epochs long.
+ fn count_bouts(seq: &[i64], code: i64, min_len: usize) -> u32 {
+     let mut count = 0;
+@@ -2368,6 +2493,57 @@ pub fn build_summary(
+         hyps.entry(start_ds).or_insert(hypnogram);
+     }
+ 
++    // The sleep-signal extension carries a night past the ring's declared end while
++    // its sleep streams keep running, which on a Ring 4 (no sleep_state to say
++    // otherwise) they do until the next sync. Where the hypnogram scores that whole
++    // extension awake, it was time up and about, not in bed: end at the ring's call.
++    for nt in &mut nights {
++        if nt.manual_bedtime || nt.end_ds <= nt.raw_end_ds || nt.raw_end_ds <= nt.start_ds {
++            continue;
++        }
++        let Some(h) = hyps.get_mut(&(nt.start_ds, nt.captured_unix)) else {
++            continue;
++        };
++        let stages: Vec<i64> = h["stages"]
++            .as_array()
++            .map(|s| s.iter().filter_map(Value::as_i64).collect())
++            .unwrap_or_default();
++        let Some(cut) = wake_extension_cut(&stages, nt.start_ds, nt.end_ds, nt.raw_end_ds) else {
++            continue;
++        };
++        let epoch_ds = (nt.end_ds - nt.start_ds) as f64 / stages.len() as f64;
++        let kept = &stages[..cut];
++        let share = |code: i64| {
++            (kept.iter().filter(|&&c| c == code).count() as f64 / cut as f64 * 1000.0).round()
++                / 10.0
++        };
++        let asleep = kept.iter().filter(|&&c| (1..=3).contains(&c)).count();
++        h["deep_pct"] = json!(share(1));
++        h["light_pct"] = json!(share(2));
++        h["rem_pct"] = json!(share(3));
++        h["wake_pct"] = json!(share(4));
++        if !h["efficiency_pct"].is_null() {
++            h["efficiency_pct"] = json!((asleep as f64 / cut as f64 * 1000.0).round() / 10.0);
++        }
++        h["stages"] = json!(kept);
++        let end = nt.start_ds + (cut as f64 * epoch_ds).round() as i64;
++        nt.end_ds = end;
++        // samples were gathered for the longer window; drop the ones past the new end
++        // (the same 60 s slack `find_night` allows) and rebuild the flat vecs from them
++        let within = |ds: i64| ds <= end + 600;
++        nt.hr_t.retain(|p| within(p.0));
++        nt.hrv_t.retain(|p| within(p.0));
++        nt.temp_t.retain(|p| within(p.0));
++        nt.spo2_t.retain(|p| within(p.0));
++        nt.motion_t.retain(|p| within(p.0));
++        nt.hr = nt.hr_t.iter().map(|p| p.1).collect();
++        nt.rmssd = nt.hrv_t.iter().map(|p| p.1).collect();
++        nt.temp = nt.temp_t.iter().map(|p| p.1).collect();
++        nt.spo2 = nt.spo2_t.iter().map(|p| p.1).collect();
++        nt.motion = nt.motion_t.iter().map(|p| p.1).collect();
++        nt.temp_end_ds = nt.temp_end_ds.map(|t| t.min(end));
++    }
++
+     nights.sort_by(|a, b| {
+         unix_s_at(a.start_ds, a.captured_unix)
+             .total_cmp(&unix_s_at(b.start_ds, b.captured_unix))
+@@ -2474,7 +2650,11 @@ pub fn build_summary(
+             ]),
+             _ => None,
+         };
+-        if !complete_staging {
++        // A period under an hour is never staged (the signal stager needs 60 min), so
++        // voiding its day would let every short doze delete that day's main sleep
++        // from the debt. It contributes nothing instead: the day undercounts by at
++        // most the doze.
++        if !complete_staging && (nt.end_ds - nt.start_ds) >= MIN_DERIVED_BED_DS {
+             incomplete_sleep_days.insert((end_unix as i64 + offset_seconds(tz)).div_euclid(86_400));
+         }
+         if asleep_s > 0 {
+@@ -3868,6 +4048,75 @@ mod tests {
+         }
+     }
+ 
++    // A night of still sleep on the accelerometer, with `moves` (epochs) of movement on
++    // it and the ring's "activity" call at `ring_active` (epochs).
++    fn night_with_acm(moves: &[i64], ring_active: &[i64]) -> Vec<i64> {
++        let start_ds = 100_000i64;
++        let end_ds = start_ds + 800 * 300;
++        let (mut hr_t, mut hrv_t) = (Vec::new(), Vec::new());
++        for i in 0..80 {
++            hr_t.push((start_ds + i * 3_000, 55.0));
++            hrv_t.push((start_ds + i * 3_000, 40.0));
++        }
++        // acm events are stamped at the end of their 30 s window
++        let acm_t: Vec<(i64, f64)> = (0..800)
++            .map(|e| (start_ds + e * 300 + 300, if moves.contains(&e) { 30.0 } else { 0.04 }))
++            .collect();
++        let ring_active_t: Vec<i64> = ring_active.iter().map(|e| start_ds + e * 300).collect();
++        stage_night_from_signals_with_activity(
++            start_ds, end_ds, &hr_t, &hrv_t, &[], &acm_t, &ring_active_t,
++        )
++    }
++
++    #[test]
++    fn ring_activity_marks_the_still_spells_between_linked_movements_awake() {
++        // Shape of 2026-10-17 02:58–03:38: movements at most ~6 min (12 epochs) apart
++        // around the ring's activity call, still in between. A roll-over 15 min before
++        // the first of them is not part of the bout.
++        let moves = [370, 400, 412, 424, 436, 448, 460, 472];
++        let stages = night_with_acm(&moves, &[425]);
++        assert!(stages[402..470].iter().all(|&c| c == 4), "{:?}", &stages[396..480]);
++        assert!(!stages[360..390].contains(&4), "{:?}", &stages[360..390]);
++        let (m, _) = sleep_metrics(&stages, 800.0 * 30.0);
++        assert_eq!(m["awakenings"], 1);
++    }
++
++    #[test]
++    fn the_same_movements_without_a_ring_activity_call_stay_asleep() {
++        let stages = night_with_acm(&[400, 412, 424, 436, 448, 460, 476], &[]);
++        assert!(!stages[100..700].contains(&4), "{:?}", &stages[396..480]);
++    }
++
++    #[test]
++    fn ring_activity_does_not_chain_across_gaps_longer_than_seven_minutes() {
++        // 8 min (16 epochs) apart: only the movements around the call itself
++        let stages = night_with_acm(&[300, 316, 332, 348, 352], &[350]);
++        assert!(stages[348..352].iter().all(|&c| c == 4), "{:?}", &stages[296..356]);
++        assert!(!stages[296..344].contains(&4), "{:?}", &stages[296..356]);
++    }
++
++    #[test]
++    fn onset_waits_for_ten_still_minutes_on_the_accelerometer() {
++        // fidgeting every 3 min for the first 20 min, then still
++        let stages = night_with_acm(&[0, 6, 12, 18, 24, 30, 36, 40], &[]);
++        let (m, _) = sleep_metrics(&stages, 800.0 * 30.0);
++        let sol = m["sol_min"].as_f64().unwrap();
++        assert!((19.0..=22.0).contains(&sol), "sol {sol}");
++    }
++
++    #[test]
++    fn an_all_wake_extension_past_the_rings_end_is_trimmed_and_nothing_else() {
++        let (start, raw_end, end) = (0i64, 700 * 300, 800 * 300);
++        let mut stages = vec![2i64; 800];
++        stages[690..].fill(4);
++        assert_eq!(wake_extension_cut(&stages, start, end, raw_end), Some(700));
++        // one sleep epoch in the extension keeps it
++        stages[750] = 2;
++        assert_eq!(wake_extension_cut(&stages, start, end, raw_end), None);
++        // no extension, nothing to trim
++        assert_eq!(wake_extension_cut(&stages, start, end, end), None);
++    }
++
+     #[test]
+     fn manual_bedtime_override_updates_summary_bounds_and_resets_cleanly() {
+         let dir = std::env::temp_dir().join(format!(
+diff --git a/dashboard/web/app.js b/dashboard/web/app.js
+index 7b72cb4..6933b31 100644
+--- a/dashboard/web/app.js
++++ b/dashboard/web/app.js
+@@ -969,8 +969,13 @@ function sleepInterpretation(d, n, m) {
+   if (n.deep_pct != null)
+     out.push(n.deep_pct < 10 ? `Deep sleep was scarce (${n.deep_pct}%) — the physically-restorative stage; low deep often follows late meals, alcohol, or stress.`
+       : `Deep sleep ${n.deep_pct}% (target ~13–23%), the physically-restorative stage.`);
+-  if (n.rem_pct != null && m.rem_latency_min != null)
+-    out.push(`REM was ${n.rem_pct}% with first REM ${Math.round(m.rem_latency_min)} min after onset (a short REM latency can signal REM pressure or sleep debt).`);
++  if (n.rem_pct != null && m.rem_latency_min != null) {
++    const lat = Math.round(m.rem_latency_min);
++    out.push(`REM was ${n.rem_pct}% with first REM ${lat} min after onset` +
++      (lat < 60 ? " — short; a short REM latency can signal REM pressure or sleep debt."
++        : lat <= 120 ? " — in the usual 60–120 min range."
++        : " — long; REM is often delayed by alcohol, some medications or a disrupted first half of the night."));
++  }
+   if (m.waso_min != null && m.awakenings != null)
+     out.push(`You spent ${Math.round(m.waso_min)} min awake across ${m.awakenings} awakening${m.awakenings === 1 ? "" : "s"} after first falling asleep.`);
+   out.forEach((t) => wrap.append(el("p", "interp-p", t)));

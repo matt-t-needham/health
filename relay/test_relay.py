@@ -54,7 +54,7 @@ def test_access_jwt():
             v.check(bad)
 
 
-def test_access_keys_unreachable():
+def test_access_keys_unreachable(capsys):
     def down():
         raise OSError("connection refused")
     with pytest.raises(relay.AccessUnavailable):
@@ -71,6 +71,9 @@ def test_access_keys_unreachable():
     v.fetched -= relay.KEYS_TTL + 1
     v.check(token())
     assert len(calls) == 2
+    # Recovered from, so a warning, not an error.
+    err = capsys.readouterr().err
+    assert "[health-relay] WARNING refetching" in err and "ERROR" not in err
 
 
 def batch(before=2086524, after=2091203, **extra):
@@ -217,6 +220,16 @@ def test_http(server):
     assert post(url, gzip.compress(b"\0" * (17 * 1024 * 1024))) == 422
     assert post(url, b"x" * (relay.MAX_BODY + 1)) == 413
     assert list((spool / "incoming").iterdir()) == []
+
+
+def test_http_server_refusal_is_error(server, capsys):
+    # A refusal http.server makes itself (no do_PUT: 501) still gets an ERROR token.
+    url, _ = server
+    req = urllib.request.Request(url + "/v1/batch", data=b"", method="PUT")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req, timeout=10)
+    assert e.value.code == 501
+    assert "[health-relay] ERROR 127.0.0.1 - code 501, message Unsupported method ('PUT')" in capsys.readouterr().err
 
 
 def test_http_wrong_source(server):

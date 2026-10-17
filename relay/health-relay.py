@@ -73,7 +73,7 @@ def log(msg: str) -> None:
 def env(name: str) -> str:
     v = os.environ.get(name, "").strip()
     if not v:
-        sys.exit(f"[health-relay] {name} not set")
+        sys.exit(f"[health-relay] ERROR {name} not set")
     return v
 
 
@@ -114,7 +114,7 @@ class AccessVerifier:
                 except (OSError, ValueError, jwt.PyJWKSetError) as e:
                     if not self.keys or age > 2 * KEYS_TTL:
                         raise AccessUnavailable(f"fetching {self.team} signing keys: {e}")
-                    log(f"ERROR refetching {self.team} signing keys failed, using cached ones: {e}")
+                    log(f"WARNING refetching {self.team} signing keys failed, using cached ones: {e}")
                 else:
                     self.keys = {k.key_id: k for k in jwks.keys if k.key_id}
                     self.fetched = time.monotonic()
@@ -288,7 +288,7 @@ class Spool:
         self.seen_dirs = [self.incoming, root / "done", root / "failed"]
         for d in [self.tmp, *self.seen_dirs]:
             if not d.is_dir():
-                sys.exit(f"[health-relay] spool dir {d} missing (run install-host.sh)")
+                sys.exit(f"[health-relay] ERROR spool dir {d} missing (run install-host.sh)")
         self.lock = threading.Lock()
 
     def put(self, batch: dict) -> bool:
@@ -321,6 +321,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         log(f"{self.address_string()} - {fmt % args}")
+
+    def log_error(self, fmt, *args):
+        # http.server's own refusals (malformed request line, unsupported
+        # method, oversized headers) come through here, not _refuse.
+        log(f"ERROR {self.address_string()} - {fmt % args}")
 
     def _reply(self, code: int, error: str = "") -> None:
         # Errors are one short plain-text line; the phone shows the first 200

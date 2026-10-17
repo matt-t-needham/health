@@ -1,0 +1,81 @@
+diff --git a/crates/oura-summary/src/lib.rs b/crates/oura-summary/src/lib.rs
+index 3e6ce99..d4e3b40 100644
+--- a/crates/oura-summary/src/lib.rs
++++ b/crates/oura-summary/src/lib.rs
+@@ -1177,17 +1177,22 @@ pub fn stage_night_from_signals(
+         *cell = 4;
+     }
+ 
+-    // Mid-night brief awakenings: paint a 3-epoch (1.5 min) arousal around substantial
+-    // movement so it survives 5-epoch mode smoothing without inflating WASO into 2.5-min blocks.
+-    for i in onset..wake_end {
+-        let lo_n = i.saturating_sub(4).max(onset);
+-        let hi_n = (i + 5).min(wake_end);
+-        let near_mo: f64 = epoch_mo[lo_n..hi_n].iter().sum();
+-        if epoch_mo[i] >= 8.0 || (epoch_mo[i] >= 5.0 && near_mo >= 10.0) {
+-            let lo = i.saturating_sub(1).max(onset);
+-            let hi = (i + 2).min(wake_end);
+-            for cell in &mut stages[lo..hi] {
+-                *cell = 4;
++    // Mid-night awakenings: sustained movement, not a single burst. The ring only logs
++    // a motion window when you moved in it, so a roll-over lights one or two epochs
++    // however hard it was, while getting up and walking lights nearly all of them.
++    // Any 5-minute stretch (WAKE_WINDOW epochs) with movement in at least
++    // WAKE_MIN_MOVING epochs is wake, from its first moving epoch to its last; the
++    // bout is then long enough to survive the 5-epoch mode smoothing below.
++    const WAKE_WINDOW: usize = 10;
++    const WAKE_MIN_MOVING: usize = 6;
++    if wake_end >= onset + WAKE_WINDOW {
++        for lo in onset..=(wake_end - WAKE_WINDOW) {
++            let win = lo..lo + WAKE_WINDOW;
++            let moving: Vec<usize> = win.filter(|&k| epoch_mo[k] > 0.0).collect();
++            if moving.len() >= WAKE_MIN_MOVING {
++                for cell in &mut stages[moving[0]..=moving[moving.len() - 1]] {
++                    *cell = 4;
++                }
+             }
+         }
+     }
+@@ -3827,6 +3832,42 @@ mod tests {
+         assert!(stages.contains(&4));
+     }
+ 
++    // A night whose motion is quiet apart from one mid-night stretch, at `moving` epochs.
++    fn night_with_midnight_motion(moving: &[usize], seconds: f64) -> Vec<i64> {
++        let start_ds = 100_000i64;
++        let end_ds = start_ds + 800 * 300;
++        let (mut hr_t, mut hrv_t, mut motion_t) = (Vec::new(), Vec::new(), Vec::new());
++        for i in 0..80 {
++            hr_t.push((start_ds + i * 3_000, 55.0));
++            hrv_t.push((start_ds + i * 3_000, 40.0));
++        }
++        for e in (0..20).chain(786..800).chain(moving.iter().map(|&e| e as i64)) {
++            motion_t.push((start_ds + e * 300, if e < 20 || e >= 786 { 9.0 } else { seconds }));
++        }
++        motion_t.sort_by_key(|&(ds, _)| ds);
++        stage_night_from_signals(start_ds, end_ds, &hr_t, &hrv_t, &motion_t)
++    }
++
++    #[test]
++    fn sustained_midnight_movement_is_one_awakening() {
++        // moving in 7 of 10 epochs (400..409): got up
++        let stages = night_with_midnight_motion(&[400, 401, 402, 404, 405, 407, 409], 6.0);
++        assert!(stages[400..410].iter().all(|&c| c == 4), "{:?}", &stages[396..414]);
++        let (m, _) = sleep_metrics(&stages, 800.0 * 30.0);
++        assert_eq!(m["awakenings"], 1);
++    }
++
++    #[test]
++    fn brief_or_sparse_midnight_movement_is_not_wake() {
++        // hard roll-overs (20 s of a 30 s window) and 5 of 10 moving epochs stay asleep
++        for moving in [&[300usize, 301, 500][..], &[400, 402, 404, 406, 408]] {
++            let stages = night_with_midnight_motion(moving, 20.0);
++            assert!(!stages[290..520].contains(&4), "{moving:?}: {:?}", &stages[290..520]);
++            let (m, _) = sleep_metrics(&stages, 800.0 * 30.0);
++            assert_eq!(m["awakenings"], 0, "{moving:?}");
++        }
++    }
++
+     #[test]
+     fn manual_bedtime_override_updates_summary_bounds_and_resets_cleanly() {
+         let dir = std::env::temp_dir().join(format!(

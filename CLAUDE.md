@@ -19,7 +19,8 @@ data dir, relay, ingest); things that are specifically the Oura product keep
 | Path | What |
 |------|------|
 | `Dockerfile` | Builds `oura` at the pinned `OPEN_HEALTH_REV` with `patches/` applied. `runtime` stage = the dashboard container; `ingest` stage = health-ingest against the same checkout |
-| `patches/` | Our changes to upstream's web UI, applied at build; listed in `patches/README.md` |
+| `patches/` | Our changes to upstream's web UI and sleep staging, applied at build; listed in `patches/README.md` |
+| `staging-eval/` | Scores sleep staging against two-ring reference nights (official Oura app on a second ring); references and outputs in `~/health/eval/`. Run it before and after any staging change (`README.md`) |
 | `android/` (`README.md`), `docs/android-design.md` | The phone app that owns the ring, and its Rust bridge (built and installed from the Mac, over adb) |
 | `relay/health-relay.py` + `systemd/health-relay.service` | Phone app's upload endpoint (172.17.0.1:9102): auth, validate, spool. See "Relay" |
 | `ingest/` → `bin/health-ingest` + `systemd/health-ingest.{service,path}` | Commits spooled batches into `oura.db` with the pinned oura-store (Rust, built in the Dockerfile's `ingest` stage) |
