@@ -19,6 +19,10 @@ RUN git clone https://github.com/Th0rgal/open_health /src \
 COPY patches/ /patches/
 RUN git -C /src apply --verbose /patches/*.patch
 WORKDIR /src
+# Upstream locks webpki-roots 1.0.8, which still embeds the root behind the
+# eMudhra intermediates distrusted 2026-10; 1.0.10 drops it. Remove this once
+# OPEN_HEALTH_REV's own Cargo.lock is at 1.0.10 or later.
+RUN cargo update -p webpki-roots@1.0.8 --precise 1.0.10
 
 FROM source AS build
 RUN cargo build --release --locked -p oura-cli
