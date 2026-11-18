@@ -229,3 +229,13 @@ reply), any new UI controls that call closed routes, and oura-store's
 the open_oura rev in `ingest/Cargo.toml` equal to upstream's). Then bump the
 ARG, rebuild both the image and health-ingest (the build fails if a patch in
 `patches/` no longer applies: regenerate it per `patches/README.md`).
+
+## Deployment
+
+Port 3014: health (health.bix.computer) — open_health's `oura dashboard`
+(pinned build, `health/`) behind `health-proxy` (stock nginx,
+`nginx/health.conf`, route allowlist) which holds the port and writes
+`logs/health/access.log`; Cloudflare Access; data in `/home/matt/health/data`
+(outside the apps tree); own `health` network. The phone app owns the ring and
+uploads to `/relay/v1/batch` → host `health-relay` (172.17.0.1:9102) → spool →
+`health-ingest`.
