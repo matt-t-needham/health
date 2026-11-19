@@ -29,6 +29,8 @@ class SessionBridge(
                 store.setState("ring_features", value)
                 onProgress("Ring features: $value")
             }
+            "warning" -> onProgress("Warning: $value")
+            else -> onProgress("Warning: unknown ring info '$key'")
         }
         return true
     }
@@ -65,6 +67,7 @@ class SessionBridge(
             true
         } catch (e: Exception) {
             // Refusing the batch stops the drain before the ring is told it is done.
+            onProgress("Could not store a batch: ${e.javaClass.simpleName}: ${e.message}")
             false
         }
     }

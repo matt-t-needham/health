@@ -9,7 +9,13 @@ object SyncRunner {
     /** Returns null on success, otherwise a one-line error. Safe to call from any worker thread. */
     fun run(ctx: Context, windowMs: Long, log: (String) -> Unit = {}): String? = synchronized(RingLock.lock) {
         val store = Store.get(ctx)
-        val err = ringPhase(ctx, store, windowMs, log)
+        val err = try {
+            ringPhase(ctx, store, windowMs, log)
+        } finally {
+            // "An attempt finished", success or not: the watchdog's measure of a live schedule.
+            // A run that Android killed never gets here, which is the point.
+            store.setState("last_attempt_ms", System.currentTimeMillis().toString())
+        }
         // Upload whatever is queued even if the ring phase failed: earlier batches may be waiting.
         val pushErr = Uploader.flush(ctx)
         if (err != null) return err

@@ -37,7 +37,15 @@ network.
 
 - **Phone (only bond to the ring).** Connect, authenticate, drain, disconnect;
   no held link. Every 6 h (WorkManager, 3 min scan window) plus Sync now
-  (60 s). Each batch and the cursor are committed in one SQLite transaction
+  (60 s). Scheduled runs are foreground work so Doze can't stop them
+  mid-sync. The ring is a **companion device** (`RingCompanion.kt`, the "Allow
+  background sync" button): the association puts the app on the power-save
+  allowlist, allows that foreground start from the background, and wakes
+  `RingPresenceService` when the ring comes into range. A 3-hourly inexact
+  alarm (`Watchdog.kt`, re-armed at boot) starts a catch-up sync when no
+  attempt has finished for 8 h: on 2026-11-16 a killed run left WorkManager
+  thinking a sync was still running, and nothing synced for 42 h until the
+  app was opened. Each batch and the cursor are committed in one SQLite transaction
   on the phone; batches are deleted only after the relay returns 2xx, so
   being away from home just queues them. **The phone owns the sync cursor.**
 - **Uploads** go to the HTPC relay; the contract and the HTPC side are under

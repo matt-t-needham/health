@@ -144,7 +144,11 @@ Fallback: a Kotlin port of the protocol.
   `BLUETOOTH_CONNECT`.
 - Foreground service of type `connectedDevice` during a sync; wake lock;
   request MTU 247 and high connection priority.
-- Scheduling: WorkManager / inexact alarms. No exact alarms.
+- Scheduling: WorkManager / inexact alarms. No exact alarms. Since
+  2026-11-18 the ring is also a companion device (power-save allowlist,
+  background foreground-service starts, presence wake-ups), scheduled syncs
+  run as foreground work, and an inexact watchdog alarm catches up after 8 h
+  without a finished attempt. See "Split: phone syncs, HTPC stores and serves" in `../CLAUDE.md`.
 - Upload retries independently of the BLE session, over any network.
 
 ## Cutover

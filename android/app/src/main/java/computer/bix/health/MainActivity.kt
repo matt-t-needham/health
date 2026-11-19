@@ -42,6 +42,7 @@ class MainActivity : Activity() {
     private lateinit var problemCard: LinearLayout
     private lateinit var problemText: TextView
     private lateinit var pairButton: Button
+    private lateinit var allowButton: Button
 
     /** Card with a 7dp accent bar on the left, rounded on the left corners only. */
     private fun card(accent: Int, content: LinearLayout, fill: Boolean = false): LinearLayout {
@@ -182,6 +183,9 @@ class MainActivity : Activity() {
             pairButton = button("Pair ring", false) { requirePermissions { confirmPair() } }
             pairButton.visibility = android.view.View.GONE
             addView(pairButton)
+            allowButton = button("Allow background sync", true) { RingCompanion.associate(this@MainActivity, ::append) }
+            allowButton.visibility = android.view.View.GONE
+            addView(allowButton)
             addView(button("Live heart rate", true) { requirePermissions { startActivity(android.content.Intent(this@MainActivity, LiveHrActivity::class.java)) } })
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -214,6 +218,7 @@ class MainActivity : Activity() {
         setContentView(root)
         Secrets.importProvisioning(this)?.let { append(it) }
         Scheduler.ensurePeriodic(this)
+        RingCompanion.observePresence(this, ::append)
         showLog()
     }
 
@@ -245,6 +250,9 @@ class MainActivity : Activity() {
         rows["ring"]?.text = ring
         // Pairing is only offered when there is no usable bond.
         pairButton.visibility = if (ring == "Not paired") android.view.View.VISIBLE else android.view.View.GONE
+        // Without the companion association Android may stop or defer scheduled syncs.
+        val allowNeeded = ring != "Not paired" && !RingCompanion.isAssociated(this)
+        allowButton.visibility = if (allowNeeded) android.view.View.VISIBLE else android.view.View.GONE
         rows["battery"]?.text = batteryText(s)
         rows["sync"]?.text = at("last_sync_ms") + events
         val n = s.pendingCount()
@@ -263,6 +271,13 @@ class MainActivity : Activity() {
         val volts = s.state("ring_voltage_mv")?.toIntOrNull()?.let { " · %.2f V".format(Locale.US, it / 1000.0) } ?: ""
         val gauge = s.state("ring_gauge_pct")?.let { "\nGauge $it%" } ?: ""
         return pct + volts + gauge
+    }
+
+    @Deprecated("Activity result API; the app uses plain Activity")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == RingCompanion.REQUEST_CODE) RingCompanion.onActivityResult(this, resultCode, ::append)
     }
 
     private fun requirePermissions(then: () -> Unit) {

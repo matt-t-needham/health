@@ -16,9 +16,10 @@ object ActivityLog {
     private const val MAX = 500
     private val lines = ArrayList<String>()
     private var file: File? = null
+    private var writeFailed = false
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
     private val main = Handler(Looper.getMainLooper())
-    private val clock = SimpleDateFormat("HH:mm:ss", Locale.US)
+    private val clock = SimpleDateFormat("MM-dd HH:mm:ss", Locale.US)
 
     @Synchronized
     fun init(ctx: Context) {
@@ -37,7 +38,10 @@ object ActivityLog {
         try {
             if (trimmed) file?.writeText(lines.joinToString("\n") + "\n") else file?.appendText(line + "\n")
         } catch (e: Exception) {
-            // The in-memory copy is still correct; losing persistence is not worth failing a sync.
+            // The in-memory copy is still correct; losing persistence is not worth failing a sync,
+            // but the screen should say the file is no longer being written.
+            if (!writeFailed) lines.add("${clock.format(java.util.Date())}  Warning: activity log not saved: ${e.javaClass.simpleName}")
+            writeFailed = true
         }
         main.post { listeners.forEach { it() } }
     }

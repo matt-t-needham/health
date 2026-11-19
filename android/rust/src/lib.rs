@@ -224,10 +224,27 @@ fn run_sync(
     rt.block_on(async {
         client.authenticate(&key).await.map_err(|e| format!("auth: {e}"))?;
         client.setup_app_stream().await.map_err(|e| format!("stream setup: {e}"))?;
-        if client.sync_time_app().await.is_err() {
-            let _ = client.sync_time().await;
+        // Both are worth a warning, not a failed sync: the drain still stores the events.
+        if let Err(app_err) = client.sync_time_app().await {
+            if let Err(e) = client.sync_time().await {
+                push_info(
+                    &mut env_cell.borrow_mut(),
+                    bridge,
+                    "warning",
+                    &format!("could not set the ring clock ({app_err}; legacy form: {e}); recent nights may stay undated"),
+                );
+            }
         }
-        let _ = client.check_sleep_analysis(false).await;
+        // Asks the ring to finish analysing a night before the drain, so its
+        // bedtime_period lands in this sync. Without it the dashboard has no night.
+        if let Err(e) = client.check_sleep_analysis(false).await {
+            push_info(
+                &mut env_cell.borrow_mut(),
+                bridge,
+                "warning",
+                &format!("sleep analysis request failed ({e}); last night may not show yet"),
+            );
+        }
         let serial = client.serial().await.unwrap_or_else(|_| "unknown".into());
         {
             let mut env = env_cell.borrow_mut();
